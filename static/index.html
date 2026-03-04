@@ -63,7 +63,17 @@
         <h3>Online</h3>
         <div id="online-users"></div>
       </div>
-      <div class="voice-section">
+      <div class="sidebar-section">
+        <h3>Voice Channels</h3>
+        <div id="voice-channel-list"></div>
+        <div class="join-channel">
+          <div style="display:flex;gap:0.3rem;align-items:center;">
+            <input type="text" id="new-voice-channel" placeholder="create voice channel"
+                   onkeydown="if(event.key==='Enter')createVoiceChannel()" style="flex:1;min-width:0;">
+          </div>
+        </div>
+      </div>
+      <div class="voice-section" id="voice-section" style="display:none;">
         <h3>Voice</h3>
         <div class="voice-status" id="voice-status">Not connected</div>
         <div id="voice-members"></div>
@@ -71,7 +81,7 @@
           <button id="mute-btn" onclick="toggleMute()">Mute</button>
           <button id="deafen-btn" onclick="toggleDeafen()">Deafen</button>
         </div>
-        <button class="voice-btn voice-join" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
+        <button class="voice-btn voice-join" id="voice-join-btn" onclick="joinVoice()" style="display:none;">Join Voice</button>
         <button class="voice-btn voice-leave" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
       </div>
       <div class="sidebar-section" style="border-top:1px solid var(--border);padding-top:0.3rem;">
@@ -102,6 +112,15 @@
         <button class="admin-btn-sm" onclick="closeSearch()" style="background:var(--bg3);color:var(--text2);">&times;</button>
       </div>
       <div class="search-results" id="search-results" style="display:none;"></div>
+
+      <!-- Video area (shown when in any voice channel) -->
+      <div id="video-area" style="display:none;">
+        <div class="video-grid" id="video-grid"></div>
+        <div class="video-controls" id="video-controls">
+          <button id="camera-btn" onclick="toggleCamera()" title="Toggle Camera">&#x1F4F7; Camera</button>
+          <button id="screenshare-btn" onclick="toggleScreenShare()" title="Share Screen">&#x1F5B5; Screen</button>
+        </div>
+      </div>
 
       <!-- Chat view -->
       <div id="chat-view">

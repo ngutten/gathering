@@ -97,6 +97,14 @@ async fn main() {
             if n > 0 {
                 tracing::info!("Purged {} expired messages", n);
             }
+            // Voice channel TTL: expire messages in voice channels that have been empty long enough
+            let pending = expiry_db.get_voice_channels_pending_expiry();
+            for (channel, _ttl_secs) in pending {
+                let expired = expiry_db.expire_voice_channel_messages(&channel);
+                if expired > 0 {
+                    tracing::info!("Voice TTL: expired {} messages in #{}", expired, channel);
+                }
+            }
         }
     });
 

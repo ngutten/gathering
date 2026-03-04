@@ -3,7 +3,7 @@
 import state, { isDMChannel } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, decryptMessage, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, triggerKeyRotation, renderKeyRequests } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, showTyping, switchChannel } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { switchView, renderTopicList, renderThread, appendTopicReply } from './topics.js';
@@ -123,6 +123,11 @@ export function handleServerMsg(msg) {
       }
       const audioEl = document.getElementById('audio-' + msg.username);
       if (audioEl) audioEl.remove();
+      break;
+
+    case 'VoiceChannelOccupancy':
+      state.voiceChannelOccupancy[msg.channel] = msg.users;
+      renderVoiceChannelList();
       break;
 
     case 'VoiceSignal':

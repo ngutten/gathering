@@ -6,7 +6,19 @@ import { escapeHtml } from './render.js';
 
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 
-export function joinVoice() {
+export function createVoiceChannel() {
+  const input = document.getElementById('new-voice-channel');
+  if (!input) return;
+  let name = input.value.trim().replace(/^#/, '');
+  if (!name) return;
+  name = name.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  if (!name) return;
+  send('CreateVoiceChannel', { channel: name });
+  input.value = '';
+}
+
+export function joinVoice(channel) {
+  const ch = channel || state.currentChannel;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     emit('system-message', 'Voice requires a secure connection (HTTPS). Connect via https:// or localhost.');
     return;
@@ -14,16 +26,32 @@ export function joinVoice() {
   navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
     state.localStream = stream;
     state.inVoiceChannel = true;
-    state.voiceChannel = state.currentChannel;
-    send('VoiceJoin', { channel: state.currentChannel });
+    state.voiceChannel = ch;
+    state.activeVoiceChannel = ch;
+    send('VoiceJoin', { channel: ch });
+    document.getElementById('voice-section').style.display = '';
     document.getElementById('voice-join-btn').style.display = 'none';
     document.getElementById('voice-leave-btn').style.display = '';
     document.getElementById('voice-controls').style.display = '';
-    document.getElementById('voice-status').textContent = 'Connected to #' + state.currentChannel;
+    document.getElementById('voice-status').textContent = 'Connected to #' + ch;
+    // Show video area
+    const videoArea = document.getElementById('video-area');
+    if (videoArea) videoArea.style.display = '';
     startLocalSpeakingDetection();
+    // Re-render voice channel list to show active state
+    import('./chat-ui.js').then(m => m.renderVoiceChannelList());
   }).catch(err => {
     emit('system-message', 'Microphone access denied: ' + err.message);
   });
+}
+
+export function joinVoiceChannel(channelName) {
+  // If already in a voice channel, leave first
+  if (state.inVoiceChannel) {
+    send('VoiceLeave', { channel: state.voiceChannel });
+    cleanupVoice();
+  }
+  joinVoice(channelName);
 }
 
 export function leaveVoice() {
@@ -49,10 +77,12 @@ export function cleanupVoice() {
   state.localAnalyser = null;
   state.inVoiceChannel = false;
   state.voiceChannel = '';
+  state.activeVoiceChannel = '';
   state.voiceMembers = [];
   state.isMuted = false;
   state.isDeafened = false;
-  document.getElementById('voice-join-btn').style.display = '';
+  document.getElementById('voice-section').style.display = 'none';
+  document.getElementById('voice-join-btn').style.display = 'none';
   document.getElementById('voice-leave-btn').style.display = 'none';
   document.getElementById('voice-controls').style.display = 'none';
   document.getElementById('voice-status').textContent = 'Not connected';
@@ -62,6 +92,11 @@ export function cleanupVoice() {
   document.getElementById('deafen-btn').classList.remove('active');
   document.getElementById('deafen-btn').textContent = 'Deafen';
   document.querySelectorAll('audio.voice-remote').forEach(el => el.remove());
+  // Hide video area
+  const videoArea = document.getElementById('video-area');
+  if (videoArea) videoArea.style.display = 'none';
+  // Re-render voice channel list
+  import('./chat-ui.js').then(m => m.renderVoiceChannelList());
 }
 
 export function createPeerConnection(targetUser, isInitiator) {
@@ -179,6 +214,16 @@ function startLocalSpeakingDetection() {
       if (el) el.classList.toggle('speaking', avg > 15 && !state.isMuted);
     }, 100);
   } catch(e) {}
+}
+
+// ── Video stubs (Session 2) ──
+
+export function toggleCamera() {
+  emit('system-message', 'Camera support coming in Session 2');
+}
+
+export function toggleScreenShare() {
+  emit('system-message', 'Screen sharing coming in Session 2');
 }
 
 function startRemoteSpeakingDetection(user, stream) {

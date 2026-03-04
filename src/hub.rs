@@ -65,6 +65,13 @@ impl Hub {
                         username: client.username.clone(),
                     };
                     Self::broadcast_to_voice_channel_inner(&clients, vc, &voice_leave, Some(id));
+
+                    // Check if voice channel is now empty
+                    let count = Self::voice_channel_user_count(&clients, vc);
+                    if count == 0 {
+                        self.db.mark_voice_channel_empty(vc);
+                    }
+                    Self::broadcast_voice_occupancy(&clients, vc);
                 }
                 // Notify text channels this user was in
                 for ch in &client.channels {
@@ -332,6 +339,37 @@ impl Hub {
                 Self::broadcast_to_channel_inner(&clients, &channel, &msg, Some(id));
             }
 
+            ClientMsg::CreateVoiceChannel { channel } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                // Check channel creation permission
+                let creation_mode = self.db.get_setting("channel_creation").unwrap_or_else(|| "all".to_string());
+                if creation_mode == "admin" && !self.db.user_has_permission(&username, "create_channel") {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels"));
+                    }
+                    return;
+                }
+
+                if self.db.channel_exists(&channel) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Channel already exists"));
+                    }
+                    return;
+                }
+
+                self.db.create_channel_with_type(&channel, "voice");
+
+                // Update channel list for everyone
+                let channels = self.channel_list_inner(&clients);
+                let list_msg = ServerMsg::ChannelList { channels };
+                Self::broadcast_all_inner(&clients, &list_msg, None);
+            }
+
             ClientMsg::VoiceJoin { channel } => {
                 let mut clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
@@ -346,18 +384,30 @@ impl Hub {
                         username: username.clone(),
                     };
                     Self::broadcast_to_voice_channel_inner(&clients, &old_vc, &leave_msg, Some(id));
+
                 }
+
+                let old_vc = clients.get(&id).and_then(|c| c.voice_channel.clone());
 
                 // Set new voice channel
                 if let Some(client) = clients.get_mut(&id) {
                     client.voice_channel = Some(channel.clone());
                 }
 
+                // Mark new channel as occupied
+                self.db.mark_voice_channel_occupied(&channel);
+
+                // Check if old voice channel is now empty
+                if let Some(ref old_ch) = old_vc {
+                    let old_count = Self::voice_channel_user_count(&clients, old_ch);
+                    if old_count == 0 {
+                        self.db.mark_voice_channel_empty(old_ch);
+                    }
+                    Self::broadcast_voice_occupancy(&clients, old_ch);
+                }
+
                 // Collect current voice members for this channel
-                let members: Vec<String> = clients.values()
-                    .filter(|c| c.voice_channel.as_deref() == Some(&channel) && !c.username.is_empty())
-                    .map(|c| c.username.clone())
-                    .collect();
+                let members: Vec<String> = Self::voice_channel_users(&clients, &channel);
 
                 // Send VoiceMembers to the joiner
                 if let Some(client) = clients.get(&id) {
@@ -373,6 +423,9 @@ impl Hub {
                     username,
                 };
                 Self::broadcast_to_voice_channel_inner(&clients, &channel, &join_msg, Some(id));
+
+                // Broadcast occupancy to all
+                Self::broadcast_voice_occupancy(&clients, &channel);
             }
 
             ClientMsg::VoiceLeave { channel } => {
@@ -390,6 +443,13 @@ impl Hub {
                     username,
                 };
                 Self::broadcast_to_voice_channel_inner(&clients, &channel, &msg, Some(id));
+
+                // Check if voice channel is now empty
+                let count = Self::voice_channel_user_count(&clients, &channel);
+                if count == 0 {
+                    self.db.mark_voice_channel_empty(&channel);
+                }
+                Self::broadcast_voice_occupancy(&clients, &channel);
             }
 
             ClientMsg::VoiceSignal { target_user, signal_data } => {
@@ -1539,18 +1599,43 @@ impl Hub {
     }
 
     fn channel_list_inner(&self, clients: &HashMap<usize, Client>) -> Vec<ChannelInfo> {
-        let db_channels = self.db.list_channels();
+        let db_channels = self.db.list_channels_with_type();
         db_channels
             .into_iter()
-            .filter(|name| !Db::is_dm_channel(name))
-            .map(|name| {
+            .filter(|(name, _)| !Db::is_dm_channel(name))
+            .map(|(name, channel_type)| {
                 let user_count = clients
                     .values()
                     .filter(|c| c.channels.contains(&name))
                     .count();
                 let encrypted = self.db.is_channel_encrypted(&name);
-                ChannelInfo { name, user_count, encrypted }
+                ChannelInfo { name, user_count, encrypted, channel_type }
             })
             .collect()
+    }
+
+    /// Count voice users in a channel
+    fn voice_channel_user_count(clients: &HashMap<usize, Client>, channel: &str) -> usize {
+        clients.values()
+            .filter(|c| c.voice_channel.as_deref() == Some(channel) && !c.username.is_empty())
+            .count()
+    }
+
+    /// Get voice users in a channel
+    fn voice_channel_users(clients: &HashMap<usize, Client>, channel: &str) -> Vec<String> {
+        clients.values()
+            .filter(|c| c.voice_channel.as_deref() == Some(channel) && !c.username.is_empty())
+            .map(|c| c.username.clone())
+            .collect()
+    }
+
+    /// Broadcast voice channel occupancy to all clients
+    fn broadcast_voice_occupancy(clients: &HashMap<usize, Client>, channel: &str) {
+        let users = Self::voice_channel_users(clients, channel);
+        let msg = ServerMsg::VoiceChannelOccupancy {
+            channel: channel.to_string(),
+            users,
+        };
+        Self::broadcast_all_inner(clients, &msg, None);
     }
 }

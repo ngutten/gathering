@@ -25,7 +25,10 @@ const state = {
 
   // Voice state
   inVoiceChannel: false,
-  voiceChannel: '',
+  voiceChannel: '',        // The voice channel we're IN (audio connected)
+  activeVoiceChannel: '',  // Same as voiceChannel, used for UI (independent of currentChannel)
+  voiceChannels: [],       // List of voice channel infos from ChannelList
+  voiceChannelOccupancy: {}, // { channelName: [username, ...] }
   voiceMembers: [],
   peerConnections: {},
   localStream: null,

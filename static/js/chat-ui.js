@@ -102,9 +102,16 @@ export function appendSystem(text) {
 }
 
 export function renderChannels() {
-  const el = document.getElementById('channel-list');
   state.channels.forEach(ch => { if (ch.encrypted) state.encryptedChannels.add(ch.name); });
-  el.innerHTML = state.channels.filter(ch => !isDMChannel(ch.name)).map(ch => {
+
+  // Separate text and voice channels
+  const textChannels = state.channels.filter(ch => !isDMChannel(ch.name) && ch.channel_type !== 'voice');
+  const voiceChannels = state.channels.filter(ch => ch.channel_type === 'voice');
+  state.voiceChannels = voiceChannels;
+
+  // Render text channels
+  const el = document.getElementById('channel-list');
+  el.innerHTML = textChannels.map(ch => {
     const lock = ch.encrypted ? '&#x1F512; ' : '#';
     const unread = state.unreadCounts[ch.name] || 0;
     const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
@@ -115,6 +122,54 @@ export function renderChannels() {
       <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
     </div>`;
   }).join('');
+
+  // Render voice channels
+  renderVoiceChannelList();
+}
+
+export function renderVoiceChannelList() {
+  const el = document.getElementById('voice-channel-list');
+  if (!el) return;
+  const voiceChannels = state.voiceChannels || [];
+  el.innerHTML = voiceChannels.map(ch => {
+    const isActive = ch.name === state.activeVoiceChannel;
+    const isViewing = ch.name === state.currentChannel;
+    const occupants = state.voiceChannelOccupancy[ch.name] || [];
+    const unread = state.unreadCounts[ch.name] || 0;
+    const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+    const boldClass = unread > 0 ? ' has-unread' : '';
+
+    let html = `<div class="voice-channel-item${boldClass}${isViewing ? ' viewing' : ''}">
+      <div class="voice-channel-header" onclick="switchChannel('${escapeHtml(ch.name)}')">
+        <span class="voice-channel-name">&#x1F50A; ${escapeHtml(ch.name)}</span>
+        <span class="channel-right">${unreadBadge}</span>
+      </div>`;
+
+    // Show occupants
+    if (occupants.length > 0) {
+      html += '<div class="voice-channel-occupants">';
+      occupants.forEach(u => {
+        html += `<div class="voice-channel-user"><span class="voice-dot"></span>${escapeHtml(u)}</div>`;
+      });
+      html += '</div>';
+    }
+
+    // Join/leave button
+    if (isActive) {
+      html += `<button class="voice-ch-btn voice-ch-leave" onclick="leaveVoice()">Leave</button>`;
+    } else {
+      html += `<button class="voice-ch-btn voice-ch-join" onclick="joinVoiceChannel('${escapeHtml(ch.name)}')">Join</button>`;
+    }
+
+    html += '</div>';
+    return html;
+  }).join('');
+
+  // Create voice channel input
+  const createEl = document.getElementById('create-voice-channel');
+  if (createEl && voiceChannels.length === 0 && !createEl.dataset.initialized) {
+    // Always show the input
+  }
 }
 
 export function renderOnlineUsers(users) {
@@ -165,9 +220,13 @@ export function switchChannel(name) {
   state.unreadCounts[name] = 0;
   state.lastReadTimestamps[name] = new Date().toISOString();
   try { localStorage.setItem('gathering_last_read_' + name, state.lastReadTimestamps[name]); } catch(e) {}
+  const isVoice = state.voiceChannels && state.voiceChannels.some(ch => ch.name === name);
   if (isDMChannel(name)) {
     const other = state.dmChannels[name] || name;
     document.getElementById('chat-channel-name').textContent = `DM: ${other}`;
+    document.querySelector('.view-toggle').style.display = 'none';
+  } else if (isVoice) {
+    document.getElementById('chat-channel-name').textContent = `\u{1F50A} ${name}`;
     document.querySelector('.view-toggle').style.display = 'none';
   } else {
     document.getElementById('chat-channel-name').textContent = `#${name}`;
@@ -178,6 +237,10 @@ export function switchChannel(name) {
   renderDMList();
   // Import switchView dynamically to avoid circular deps
   import('./topics.js').then(m => m.switchView('chat'));
+  // Auto-join voice channels on the text side so we can send/receive messages
+  if (isVoice) {
+    send('Join', { channel: name });
+  }
   send('History', { channel: name, limit: 100 });
   if (state.encryptedChannels.has(name) && !state.channelKeys[name] && state.e2eReady) {
     send('RequestChannelKey', { channel: name });

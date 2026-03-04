@@ -29,6 +29,8 @@ pub enum ClientMsg {
     History { channel: String, limit: Option<u32> },
     /// Typing indicator
     Typing { channel: String },
+    /// Create a voice channel
+    CreateVoiceChannel { channel: String },
     /// Join a voice channel
     VoiceJoin { channel: String },
     /// Leave voice channel
@@ -156,6 +158,8 @@ pub enum ServerMsg {
     VoiceSignal { from_user: String, signal_data: serde_json::Value },
     /// Current voice channel members
     VoiceMembers { channel: String, users: Vec<String> },
+    /// Voice channel occupancy update (broadcast to all)
+    VoiceChannelOccupancy { channel: String, users: Vec<String> },
     /// List of topics for a channel
     TopicList { channel: String, topics: Vec<TopicSummary> },
     /// Full topic with replies
@@ -225,6 +229,8 @@ pub struct ChannelInfo {
     pub user_count: usize,
     #[serde(default)]
     pub encrypted: bool,
+    #[serde(default)]
+    pub channel_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

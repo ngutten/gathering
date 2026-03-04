@@ -256,6 +256,24 @@ impl Db {
             let _ = conn.execute_batch("ALTER TABLE files ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;");
         }
 
+        // Add channel_type column to channels if missing
+        let channels_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='channels'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !channels_sql.is_empty() && !channels_sql.contains("channel_type") {
+            let _ = conn.execute_batch("ALTER TABLE channels ADD COLUMN channel_type TEXT NOT NULL DEFAULT 'text';");
+        }
+
+        // Voice channel TTL table
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS voice_channel_ttl (
+                channel TEXT PRIMARY KEY,
+                empty_since TEXT,
+                default_ttl_secs INTEGER NOT NULL DEFAULT 600
+            );"
+        )?;
+
         Ok(Db { conn: Mutex::new(conn) })
     }
 
@@ -1300,6 +1318,96 @@ impl Db {
     }
 
     // ── Private helpers ─────────────────────────────────────────────
+
+    // ── Voice Channel Types & TTL ─────────────────────────────────
+
+    pub fn create_channel_with_type(&self, name: &str, channel_type: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO channels(name, channel_type) VALUES (?1, ?2)",
+            params![name, channel_type],
+        );
+        if channel_type == "voice" {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO voice_channel_ttl(channel) VALUES (?1)",
+                params![name],
+            );
+        }
+    }
+
+    pub fn get_channel_type(&self, name: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT channel_type FROM channels WHERE name = ?1",
+            params![name],
+            |row| row.get::<_, String>(0),
+        ).ok()
+    }
+
+    pub fn list_channels_with_type(&self) -> Vec<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT name, COALESCE(channel_type, 'text') FROM channels ORDER BY name"
+        ).unwrap();
+        stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    pub fn mark_voice_channel_occupied(&self, channel: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE voice_channel_ttl SET empty_since = NULL WHERE channel = ?1",
+            params![channel],
+        );
+    }
+
+    pub fn mark_voice_channel_empty(&self, channel: &str) {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let _ = conn.execute(
+            "UPDATE voice_channel_ttl SET empty_since = ?2 WHERE channel = ?1",
+            params![channel, now],
+        );
+    }
+
+    pub fn get_voice_channels_pending_expiry(&self) -> Vec<(String, i64)> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = conn.prepare(
+            "SELECT channel, default_ttl_secs FROM voice_channel_ttl
+             WHERE empty_since IS NOT NULL
+             AND datetime(empty_since, '+' || default_ttl_secs || ' seconds') <= ?1"
+        ).unwrap();
+        stmt.query_map(params![now], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn expire_voice_channel_messages(&self, channel: &str) -> usize {
+        let conn = self.conn.lock().unwrap();
+        // Delete messages without explicit TTL (expires_at IS NULL) in this voice channel
+        let msgs = conn.execute(
+            "DELETE FROM messages WHERE channel = ?1 AND expires_at IS NULL",
+            params![channel],
+        ).unwrap_or(0);
+        // Delete topic replies for topics in this channel
+        let _ = conn.execute(
+            "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE channel = ?1 AND expires_at IS NULL)",
+            params![channel],
+        );
+        let topics = conn.execute(
+            "DELETE FROM topics WHERE channel = ?1 AND expires_at IS NULL",
+            params![channel],
+        ).unwrap_or(0);
+        // Reset empty_since
+        let _ = conn.execute(
+            "UPDATE voice_channel_ttl SET empty_since = NULL WHERE channel = ?1",
+            params![channel],
+        );
+        msgs + topics
+    }
 
     fn get_file_inner(&self, conn: &Connection, id: &str) -> Option<FileInfo> {
         conn.query_row(
