@@ -1,0 +1,235 @@
+mod auth;
+mod channels;
+mod dms;
+mod encryption;
+mod files;
+mod invites;
+mod members;
+mod messages;
+mod quotas;
+mod roles;
+mod search;
+mod settings;
+mod topics;
+mod voice;
+
+use rusqlite::{Connection, params};
+use std::path::Path;
+use std::sync::Mutex;
+
+use crate::protocol::FileInfo;
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) {
+    let sql: String = conn
+        .prepare(&format!("SELECT sql FROM sqlite_master WHERE type='table' AND name='{}'", table))
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+        .unwrap_or_default();
+    if !sql.is_empty() && !sql.contains(column) {
+        let _ = conn.execute_batch(&format!("ALTER TABLE {} ADD COLUMN {} {};", table, column, definition));
+    }
+}
+
+pub struct Db {
+    conn: Mutex<Connection>,
+}
+
+impl Db {
+    pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open(path)?;
+
+        // WAL mode for concurrent reads
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL REFERENCES users(username),
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS channels (
+                name TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL REFERENCES channels(name),
+                author TEXT NOT NULL REFERENCES users(username),
+                content TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                expires_at TEXT,
+                attachments TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS files (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mime_type TEXT NOT NULL,
+                uploader TEXT NOT NULL REFERENCES users(username),
+                channel TEXT NOT NULL REFERENCES channels(name),
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_messages_channel_time
+                ON messages(channel, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_expires
+                ON messages(expires_at) WHERE expires_at IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS topics (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                author TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                attachments TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS topic_replies (
+                id TEXT PRIMARY KEY,
+                topic_id TEXT NOT NULL REFERENCES topics(id),
+                author TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                attachments TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_topics_channel
+                ON topics(channel, pinned DESC, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_topic_replies_topic
+                ON topic_replies(topic_id, created_at ASC);
+
+            -- Roles & permissions
+            CREATE TABLE IF NOT EXISTS roles (
+                name TEXT PRIMARY KEY,
+                permissions TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE IF NOT EXISTS user_roles (
+                username TEXT NOT NULL REFERENCES users(username),
+                role_name TEXT NOT NULL REFERENCES roles(name),
+                PRIMARY KEY (username, role_name)
+            );
+
+            -- Server settings
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            -- Invite codes
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code TEXT PRIMARY KEY,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                used_by TEXT,
+                used_at TEXT
+            );
+
+            -- E2E encryption tables
+            CREATE TABLE IF NOT EXISTS user_public_keys (
+                username TEXT PRIMARY KEY REFERENCES users(username),
+                public_key TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS channel_encryption (
+                channel TEXT PRIMARY KEY REFERENCES channels(name),
+                key_version INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS channel_keys (
+                channel TEXT NOT NULL,
+                username TEXT NOT NULL,
+                encrypted_key TEXT NOT NULL,
+                key_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (channel, username, key_version)
+            );
+
+            INSERT OR IGNORE INTO settings(key, value) VALUES ('registration_mode', 'open');
+            INSERT OR IGNORE INTO settings(key, value) VALUES ('channel_creation', 'all');
+
+            -- Ensure 'general' channel exists
+            INSERT OR IGNORE INTO channels(name) VALUES ('general');",
+        )?;
+
+        // Column migrations for existing databases
+        ensure_column(&conn, "messages", "attachments", "TEXT");
+        ensure_column(&conn, "topics", "expires_at", "TEXT");
+        ensure_column(&conn, "topics", "attachments", "TEXT");
+        ensure_column(&conn, "topic_replies", "expires_at", "TEXT");
+        ensure_column(&conn, "topic_replies", "attachments", "TEXT");
+        ensure_column(&conn, "messages", "edited_at", "TEXT");
+        ensure_column(&conn, "topics", "edited_at", "TEXT");
+        ensure_column(&conn, "topic_replies", "edited_at", "TEXT");
+        ensure_column(&conn, "messages", "encrypted", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "topics", "encrypted", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "topic_replies", "encrypted", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "roles", "disk_quota_mb", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "files", "pinned", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "channels", "channel_type", "TEXT NOT NULL DEFAULT 'text'");
+        ensure_column(&conn, "channels", "restricted", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "channels", "created_by", "TEXT");
+        ensure_column(&conn, "sessions", "expires_at", "TEXT");
+        ensure_column(&conn, "files", "encrypted", "INTEGER NOT NULL DEFAULT 0");
+
+        // Table creation migrations
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS dm_members (
+                channel TEXT NOT NULL,
+                username TEXT NOT NULL,
+                PRIMARY KEY (channel, username)
+            );"
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS voice_channel_ttl (
+                channel TEXT PRIMARY KEY,
+                empty_since TEXT,
+                default_ttl_secs INTEGER NOT NULL DEFAULT 600
+            );"
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS channel_members (
+                channel TEXT NOT NULL,
+                username TEXT NOT NULL,
+                PRIMARY KEY (channel, username)
+            );"
+        )?;
+
+        Ok(Db { conn: Mutex::new(conn) })
+    }
+
+    fn get_file_inner(&self, conn: &Connection, id: &str) -> Option<FileInfo> {
+        conn.query_row(
+            "SELECT id, filename, size, mime_type, encrypted FROM files WHERE id = ?1",
+            params![id],
+            |row| {
+                let file_id: String = row.get(0)?;
+                Ok(FileInfo {
+                    url: format!("/api/files/{}", file_id),
+                    id: file_id,
+                    filename: row.get(1)?,
+                    size: row.get(2)?,
+                    mime_type: row.get(3)?,
+                    encrypted: row.get::<_, i32>(4).unwrap_or(0) != 0,
+                })
+            },
+        )
+        .ok()
+    }
+}
