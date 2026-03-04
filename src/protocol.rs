@@ -42,6 +42,8 @@ pub enum ClientMsg {
         body: String,
         ttl_secs: Option<u64>,
         attachments: Option<Vec<String>>,
+        #[serde(default)]
+        encrypted: bool,
     },
     /// List topics for a channel
     ListTopics { channel: String, limit: Option<u32> },
@@ -53,6 +55,8 @@ pub enum ClientMsg {
         content: String,
         ttl_secs: Option<u64>,
         attachments: Option<Vec<String>>,
+        #[serde(default)]
+        encrypted: bool,
     },
     /// Pin/unpin a topic
     PinTopic { topic_id: String, pinned: bool },
@@ -60,9 +64,9 @@ pub enum ClientMsg {
     // ── Edit/Delete ──
     EditMessage { message_id: String, content: String },
     DeleteMessage { message_id: String },
-    EditTopic { topic_id: String, title: Option<String>, body: Option<String> },
+    EditTopic { topic_id: String, title: Option<String>, body: Option<String>, #[serde(default)] encrypted: bool },
     DeleteTopic { topic_id: String },
-    EditTopicReply { reply_id: String, content: String },
+    EditTopicReply { reply_id: String, content: String, #[serde(default)] encrypted: bool },
     DeleteTopicReply { reply_id: String },
 
     // ── Admin ──
@@ -78,6 +82,10 @@ pub enum ClientMsg {
     AssignRole { username: String, role_name: String },
     RemoveRole { username: String, role_name: String },
     GetUserRoles { username: String },
+
+    // ── Direct Messages ──
+    StartDM { target_user: String },
+    ListDMs,
 
     // ── E2E Encryption ──
     UploadPublicKey { public_key: String },
@@ -154,9 +162,9 @@ pub enum ServerMsg {
     // ── Edit/Delete broadcasts ──
     MessageEdited { id: String, channel: String, content: String, edited_at: String },
     MessageDeleted { id: String, channel: String },
-    TopicEdited { topic_id: String, channel: String, title: Option<String>, body: Option<String>, edited_at: String },
+    TopicEdited { topic_id: String, channel: String, title: Option<String>, body: Option<String>, edited_at: String, #[serde(default)] encrypted: bool },
     TopicDeleted { topic_id: String, channel: String },
-    TopicReplyEdited { reply_id: String, topic_id: String, content: String, edited_at: String },
+    TopicReplyEdited { reply_id: String, topic_id: String, content: String, edited_at: String, #[serde(default)] encrypted: bool },
     TopicReplyDeleted { reply_id: String, topic_id: String },
 
     // ── Admin responses ──
@@ -166,6 +174,10 @@ pub enum ServerMsg {
     InviteList { invites: Vec<InviteInfo> },
     RoleList { roles: Vec<RoleInfo> },
     UserRoles { username: String, roles: Vec<String> },
+
+    // ── Direct Messages ──
+    DMStarted { channel: String, other_user: String, #[serde(default)] initiated: bool },
+    DMList { dms: Vec<DMInfo> },
 
     // ── E2E Encryption ──
     PublicKeys { keys: HashMap<String, String> },
@@ -222,6 +234,8 @@ pub struct TopicSummary {
     pub last_activity: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +253,8 @@ pub struct TopicDetailData {
     pub attachments: Option<Vec<FileInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edited_at: Option<String>,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +270,17 @@ pub struct TopicReplyData {
     pub attachments: Option<Vec<FileInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edited_at: Option<String>,
+    #[serde(default)]
+    pub encrypted: bool,
+}
+
+// ── DM types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DMInfo {
+    pub channel: String,
+    pub other_user: String,
+    pub encrypted: bool,
 }
 
 // ── Admin data types ────────────────────────────────────────────────

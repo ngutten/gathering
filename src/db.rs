@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-use crate::protocol::{FileInfo, HistoryMessage, InviteInfo, RoleInfo, TopicDetailData, TopicReplyData, TopicSummary};
+use crate::protocol::{DMInfo, FileInfo, HistoryMessage, InviteInfo, RoleInfo, TopicDetailData, TopicReplyData, TopicSummary};
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -210,6 +210,33 @@ impl Db {
         if !msg_sql3.is_empty() && !msg_sql3.contains("encrypted") {
             let _ = conn.execute_batch("ALTER TABLE messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;");
         }
+
+        // Add encrypted column to topics if missing
+        let topics_sql3: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='topics'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !topics_sql3.is_empty() && !topics_sql3.contains("encrypted") {
+            let _ = conn.execute_batch("ALTER TABLE topics ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;");
+        }
+
+        // Add encrypted column to topic_replies if missing
+        let replies_sql3: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='topic_replies'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !replies_sql3.is_empty() && !replies_sql3.contains("encrypted") {
+            let _ = conn.execute_batch("ALTER TABLE topic_replies ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;");
+        }
+
+        // DM members table
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS dm_members (
+                channel TEXT NOT NULL,
+                username TEXT NOT NULL,
+                PRIMARY KEY (channel, username)
+            );"
+        )?;
 
         Ok(Db { conn: Mutex::new(conn) })
     }
@@ -614,15 +641,15 @@ impl Db {
 
     pub fn create_topic(
         &self, id: &str, channel: &str, title: &str, body: &str, author: &str,
-        expires_at: Option<&str>, attachments: Option<&Vec<String>>,
+        expires_at: Option<&str>, attachments: Option<&Vec<String>>, encrypted: bool,
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
         conn.execute(
-            "INSERT INTO topics (id, channel, title, body, author, created_at, expires_at, attachments)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, channel, title, body, author, now, expires_at, att_json],
+            "INSERT INTO topics (id, channel, title, body, author, created_at, expires_at, attachments, encrypted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, channel, title, body, author, now, expires_at, att_json, encrypted as i32],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -634,7 +661,7 @@ impl Db {
             "SELECT t.id, t.channel, t.title, t.author, t.created_at, t.pinned,
                     COUNT(r.id) as reply_count,
                     COALESCE(MAX(r.created_at), t.created_at) as last_activity,
-                    t.expires_at
+                    t.expires_at, t.encrypted
              FROM topics t
              LEFT JOIN topic_replies r ON r.topic_id = t.id
              WHERE t.channel = ?1
@@ -654,6 +681,7 @@ impl Db {
                 reply_count: row.get::<_, u32>(6)?,
                 last_activity: row.get(7)?,
                 expires_at: row.get(8)?,
+                encrypted: row.get::<_, i32>(9).unwrap_or(0) != 0,
             })
         }).unwrap().filter_map(|r| r.ok()).collect()
     }
@@ -661,7 +689,7 @@ impl Db {
     pub fn get_topic(&self, topic_id: &str) -> Option<TopicDetailData> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, channel, title, body, author, created_at, pinned, expires_at, attachments, edited_at FROM topics WHERE id = ?1",
+            "SELECT id, channel, title, body, author, created_at, pinned, expires_at, attachments, edited_at, encrypted FROM topics WHERE id = ?1",
             params![topic_id],
             |row| {
                 let att_str: Option<String> = row.get(8)?;
@@ -680,6 +708,7 @@ impl Db {
                     expires_at: row.get(7)?,
                     attachments,
                     edited_at: row.get(9)?,
+                    encrypted: row.get::<_, i32>(10).unwrap_or(0) != 0,
                 })
             },
         ).ok()
@@ -689,7 +718,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
-            "SELECT id, topic_id, author, content, created_at, expires_at, attachments, edited_at FROM topic_replies
+            "SELECT id, topic_id, author, content, created_at, expires_at, attachments, edited_at, encrypted FROM topic_replies
              WHERE topic_id = ?1
                AND (expires_at IS NULL OR expires_at > ?2)
              ORDER BY created_at ASC LIMIT ?3"
@@ -709,13 +738,14 @@ impl Db {
                 expires_at: row.get(5)?,
                 attachments,
                 edited_at: row.get(7)?,
+                encrypted: row.get::<_, i32>(8).unwrap_or(0) != 0,
             })
         }).unwrap().filter_map(|r| r.ok()).collect()
     }
 
     pub fn create_topic_reply(
         &self, id: &str, topic_id: &str, author: &str, content: &str,
-        expires_at: Option<&str>, attachments: Option<&Vec<String>>,
+        expires_at: Option<&str>, attachments: Option<&Vec<String>>, encrypted: bool,
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         // Verify topic exists
@@ -730,9 +760,9 @@ impl Db {
         let now = Utc::now().to_rfc3339();
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
         conn.execute(
-            "INSERT INTO topic_replies (id, topic_id, author, content, created_at, expires_at, attachments)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, topic_id, author, content, now, expires_at, att_json],
+            "INSERT INTO topic_replies (id, topic_id, author, content, created_at, expires_at, attachments, encrypted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, topic_id, author, content, now, expires_at, att_json, encrypted as i32],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -941,6 +971,51 @@ impl Db {
             params![code, username, now],
         ).map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    // ── Direct Messages ─────────────────────────────────────────
+
+    pub fn add_dm_member(&self, channel: &str, username: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO dm_members(channel, username) VALUES(?1, ?2)",
+            params![channel, username],
+        );
+    }
+
+    pub fn is_dm_member(&self, channel: &str, username: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM dm_members WHERE channel = ?1 AND username = ?2",
+            params![channel, username],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false)
+    }
+
+    pub fn list_user_dms(&self, username: &str) -> Vec<DMInfo> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT channel FROM dm_members WHERE username = ?1"
+        ).unwrap();
+        stmt.query_map(params![username], |row| {
+            let channel: String = row.get(0)?;
+            // Extract other user from dm:userA:userB
+            let parts: Vec<&str> = channel.splitn(3, ':').collect();
+            let other_user = if parts.len() == 3 {
+                if parts[1] == username { parts[2].to_string() } else { parts[1].to_string() }
+            } else {
+                "unknown".to_string()
+            };
+            Ok(DMInfo {
+                channel,
+                other_user,
+                encrypted: true,
+            })
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn is_dm_channel(name: &str) -> bool {
+        name.starts_with("dm:")
     }
 
     // ── E2E Encryption ────────────────────────────────────────────

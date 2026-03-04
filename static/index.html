@@ -61,9 +61,8 @@
   .channel-item:hover { background: var(--bg3); }
   .channel-item.active { background: var(--bg3); color: var(--accent); }
   .channel-item .count { font-size: 0.7rem; color: var(--text2); }
-  .user-item { padding: 0.25rem 1rem; font-size: 0.8rem; color: var(--text2); }
-  .user-item::before { content: '\25CF'; color: var(--green); margin-right: 0.4rem;
-                       font-size: 0.6rem; }
+  .user-item { padding: 0.25rem 1rem; font-size: 0.8rem; color: var(--text2);
+               display: flex; align-items: center; justify-content: space-between; }
   .join-channel { padding: 0.5rem 1rem; }
   .join-channel input { width: 100%; padding: 0.3rem 0.5rem; background: var(--bg);
                        border: 1px solid var(--border); border-radius: 3px;
@@ -248,6 +247,20 @@
   .thread-replies { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; }
   .topic-empty { color: var(--text2); font-size: 0.85rem; padding: 2rem; text-align: center; }
 
+  /* ── DM section ─── */
+  .dm-item { padding: 0.35rem 1rem; font-size: 0.85rem; cursor: pointer;
+             display: flex; justify-content: space-between; align-items: center; }
+  .dm-item:hover { background: var(--bg3); }
+  .dm-item.active { background: var(--bg3); color: var(--accent); }
+  .dm-item .dm-name { display: flex; align-items: center; gap: 0.3rem; }
+  .dm-btn { background: none; border: none; color: var(--text2); cursor: pointer;
+            font-size: 0.85rem; padding: 0 0.2rem; line-height: 1; }
+  .dm-btn:hover { color: var(--accent); }
+  .user-item { display: flex; align-items: center; justify-content: space-between; }
+  .user-item-name { display: flex; align-items: center; }
+  .user-item-name::before { content: '\25CF'; color: var(--green); margin-right: 0.4rem;
+                            font-size: 0.6rem; }
+
   /* ── Admin panel overlay ─── */
   .admin-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                    background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
@@ -336,6 +349,10 @@
             <input type="checkbox" id="encrypted-channel-check"> Encrypted (E2E)
           </label>
         </div>
+      </div>
+      <div class="sidebar-section" id="dm-section">
+        <h3>Direct Messages</h3>
+        <div id="dm-list"></div>
       </div>
       <div class="sidebar-section">
         <h3>Online</h3>
@@ -532,6 +549,10 @@ let pendingAttachments = []; // {id, filename, size}
 let userRoles = [];
 let isAdmin = false;
 let editingMessageId = null;
+
+// ── DM state ─────────────────────────────────────────────────────────
+let dmChannels = {};   // channel name -> other_user
+let isDMChannel = (name) => name && name.startsWith('dm:');
 
 // ── E2E Encryption state ────────────────────────────────────────────
 let e2eReady = false;
@@ -1021,7 +1042,10 @@ function handleServerMsg(msg) {
       if (msg.channel === currentChannel) {
         const t = topicsList.find(t => t.id === msg.topic_id);
         if (t) {
-          if (msg.title) t.title = msg.title;
+          if (msg.title) {
+            t.title = msg.title;
+            if (msg.encrypted) t.encrypted = true;
+          }
           if (currentView === 'topics') renderTopicList(topicsList);
         }
         if (currentTopicId === msg.topic_id && currentView === 'thread') {
@@ -1046,8 +1070,17 @@ function handleServerMsg(msg) {
       if (msg.topic_id === currentTopicId && currentView === 'thread') {
         const replyEl = document.querySelector(`.msg[data-reply-id="${msg.reply_id}"]`);
         if (replyEl) {
+          let editedContent = msg.content;
+          if (msg.encrypted && channelKeys[currentChannel]) {
+            const dec = decryptMessage(msg.content, channelKeys[currentChannel]);
+            editedContent = dec !== null ? dec : '[Encrypted - decryption failed]';
+          } else if (msg.encrypted) {
+            editedContent = '[Encrypted - key unavailable]';
+          }
           const bodyEl = replyEl.querySelector('.body');
-          if (bodyEl) bodyEl.innerHTML = renderRichContent(msg.content);
+          if (bodyEl) bodyEl.innerHTML = renderRichContent(editedContent);
+          replyEl.setAttribute('data-content', editedContent);
+          replyEl.setAttribute('data-raw-content', msg.content);
           let editedSpan = replyEl.querySelector('.edited');
           if (!editedSpan) {
             editedSpan = document.createElement('span');
@@ -1086,18 +1119,35 @@ function handleServerMsg(msg) {
       const symKey = decryptChannelKey(msg.encrypted_key);
       if (symKey) {
         channelKeys[msg.channel] = symKey;
-        // If this is the current channel, re-request history to decrypt
+        // If this is the current channel, re-request history/topics to decrypt
         if (msg.channel === currentChannel) {
           ws.send(JSON.stringify({ type: 'History', channel: msg.channel, limit: 100 }));
+          if (currentView === 'topics') {
+            ws.send(JSON.stringify({ type: 'ListTopics', channel: msg.channel, limit: 50 }));
+          } else if (currentView === 'thread' && currentTopicId) {
+            ws.send(JSON.stringify({ type: 'GetTopic', topic_id: currentTopicId }));
+          }
         }
       }
       break;
     }
 
     case 'ChannelKeyRequest': {
-      // Another user needs the channel key - show approval prompt
+      // Another user needs the channel key
       if (channelKeys[msg.channel]) {
-        showKeyApproval(msg.channel, msg.requesting_user, msg.public_key);
+        if (isDMChannel(msg.channel)) {
+          // Auto-approve for DM channels - both users are authorized
+          const sealed = encryptChannelKeyForUser(channelKeys[msg.channel], msg.public_key);
+          ws.send(JSON.stringify({
+            type: 'ProvideChannelKey',
+            channel: msg.channel,
+            target_user: msg.requesting_user,
+            encrypted_key: sealed,
+          }));
+          publicKeyCache[msg.requesting_user] = msg.public_key;
+        } else {
+          showKeyApproval(msg.channel, msg.requesting_user, msg.public_key);
+        }
       }
       break;
     }
@@ -1113,6 +1163,50 @@ function handleServerMsg(msg) {
     case 'ChannelKeyRotated':
       // Request the new key
       ws.send(JSON.stringify({ type: 'RequestChannelKey', channel: msg.channel }));
+      break;
+
+    // ── Direct Messages ──
+    case 'DMStarted':
+      dmChannels[msg.channel] = msg.other_user;
+      encryptedChannels.add(msg.channel);
+      renderDMList();
+      // Only the initiator generates the channel key
+      if (msg.initiated && e2eReady && !channelKeys[msg.channel]) {
+        const chKey = generateChannelKey();
+        channelKeys[msg.channel] = chKey;
+        // Seal for self and store
+        const sealedForSelf = encryptChannelKeyForUser(chKey, sodium.to_base64(myKeyPair.publicKey));
+        ws.send(JSON.stringify({ type: 'CreateEncryptedChannel', channel: msg.channel, encrypted_channel_key: sealedForSelf }));
+        // Request other user's public key to seal for them
+        ws.send(JSON.stringify({ type: 'GetPublicKeys', usernames: [msg.other_user] }));
+        // After getting key, seal and provide to other user
+        const waitForKey = setInterval(() => {
+          if (publicKeyCache[msg.other_user]) {
+            clearInterval(waitForKey);
+            const sealedForOther = encryptChannelKeyForUser(chKey, publicKeyCache[msg.other_user]);
+            ws.send(JSON.stringify({ type: 'ProvideChannelKey', channel: msg.channel, target_user: msg.other_user, encrypted_key: sealedForOther }));
+          }
+        }, 200);
+        setTimeout(() => clearInterval(waitForKey), 5000);
+      } else if (!msg.initiated && e2eReady && !channelKeys[msg.channel]) {
+        // Non-initiator: wait briefly for ChannelKeyData from initiator, then request
+        const dmCh = msg.channel;
+        setTimeout(() => {
+          if (!channelKeys[dmCh]) {
+            ws.send(JSON.stringify({ type: 'RequestChannelKey', channel: dmCh }));
+          }
+        }, 2000);
+      }
+      // Switch to the DM channel
+      switchChannel(msg.channel);
+      break;
+
+    case 'DMList':
+      msg.dms.forEach(dm => {
+        dmChannels[dm.channel] = dm.other_user;
+        encryptedChannels.add(dm.channel);
+      });
+      renderDMList();
       break;
 
     // ── Admin responses ──
@@ -1390,7 +1484,7 @@ function renderChannels() {
   const el = document.getElementById('channel-list');
   // Track encrypted channels
   channels.forEach(ch => { if (ch.encrypted) encryptedChannels.add(ch.name); });
-  el.innerHTML = channels.map(ch => {
+  el.innerHTML = channels.filter(ch => !isDMChannel(ch.name)).map(ch => {
     const lock = ch.encrypted ? '&#x1F512; ' : '#';
     return `<div class="channel-item ${ch.name === currentChannel ? 'active' : ''}"
          onclick="switchChannel('${ch.name}')">
@@ -1402,9 +1496,29 @@ function renderChannels() {
 
 function renderOnlineUsers(users) {
   const el = document.getElementById('online-users');
-  el.innerHTML = users.map(u =>
-    `<div class="user-item">${escapeHtml(u)}</div>`
+  el.innerHTML = users.map(u => {
+    const dmBtn = u !== currentUser ?
+      `<button class="dm-btn" onclick="startDM('${escapeHtml(u)}')" title="Message ${escapeHtml(u)}">&#x2709;</button>` : '';
+    return `<div class="user-item"><span class="user-item-name">${escapeHtml(u)}</span>${dmBtn}</div>`;
+  }).join('');
+}
+
+function renderDMList() {
+  const el = document.getElementById('dm-list');
+  const entries = Object.entries(dmChannels);
+  if (entries.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = entries.map(([ch, other]) =>
+    `<div class="dm-item ${ch === currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
+      <span class="dm-name">&#x1F512; ${escapeHtml(other)}</span>
+    </div>`
   ).join('');
+}
+
+function startDM(targetUser) {
+  ws.send(JSON.stringify({ type: 'StartDM', target_user: targetUser }));
 }
 
 function showTyping(username) {
@@ -1501,9 +1615,18 @@ function switchChannel(name) {
   currentChannel = name;
   currentTopicId = null;
   topicsList = [];
-  document.getElementById('chat-channel-name').textContent = `#${name}`;
+  if (isDMChannel(name)) {
+    const other = dmChannels[name] || name;
+    document.getElementById('chat-channel-name').textContent = `DM: ${other}`;
+    // Hide topics view toggle for DMs
+    document.querySelector('.view-toggle').style.display = 'none';
+  } else {
+    document.getElementById('chat-channel-name').textContent = `#${name}`;
+    document.querySelector('.view-toggle').style.display = '';
+  }
   document.getElementById('messages').innerHTML = '';
   renderChannels();
+  renderDMList();
   switchView('chat');
   ws.send(JSON.stringify({ type: 'History', channel: name, limit: 100 }));
   // Request channel key if encrypted and not cached
@@ -1515,7 +1638,7 @@ function switchChannel(name) {
 function joinChannel() {
   const input = document.getElementById('new-channel');
   let name = input.value.trim().replace(/^#/, '').replace(/[^a-zA-Z0-9_-]/g, '');
-  if (!name) return;
+  if (!name || isDMChannel(name)) return;
   const encCheck = document.getElementById('encrypted-channel-check');
   const wantEncrypted = encCheck && encCheck.checked;
   input.value = '';
@@ -1877,8 +2000,20 @@ function renderTopicList(topics) {
   el.innerHTML = topics.map(t => {
     const time = new Date(t.created_at).toLocaleDateString();
     const lastAct = formatTimeAgo(t.last_activity);
+    let displayTitle = t.title;
+    let encBadge = '';
+    if (t.encrypted) {
+      const ch = t.channel || currentChannel;
+      if (channelKeys[ch]) {
+        const dec = decryptMessage(t.title, channelKeys[ch]);
+        displayTitle = dec !== null ? dec : '[Encrypted - decryption failed]';
+      } else {
+        displayTitle = '[Encrypted - key unavailable]';
+      }
+      encBadge = '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+    }
     return `<div class="topic-item${t.pinned ? ' pinned' : ''}" onclick="openTopic('${escapeHtml(t.id)}')">
-      <div class="topic-title">${t.pinned ? '<span class="topic-pin-icon">&#x1F4CC;</span>' : ''}${escapeHtml(t.title)}</div>
+      <div class="topic-title">${t.pinned ? '<span class="topic-pin-icon">&#x1F4CC;</span>' : ''}${escapeHtml(displayTitle)}${encBadge}</div>
       <div class="topic-meta">by ${escapeHtml(t.author)} &middot; ${time}${t.expires_at ? ' ' + renderTtlBadge(t.expires_at) : ''}</div>
       <div class="topic-stats">${t.reply_count} ${t.reply_count === 1 ? 'reply' : 'replies'} &middot; last activity ${lastAct}</div>
     </div>`;
@@ -1907,11 +2042,17 @@ function backToTopics() {
 function createTopic() {
   const titleEl = document.getElementById('new-topic-title');
   const bodyEl = document.getElementById('new-topic-body');
-  const title = titleEl.value.trim();
-  const body = bodyEl.value.trim();
+  let title = titleEl.value.trim();
+  let body = bodyEl.value.trim();
   if (!title) return;
   const ttlVal = document.getElementById('topic-ttl-select').value;
-  const msg = { type: 'CreateTopic', channel: currentChannel, title, body: body || '' };
+  let isEncrypted = false;
+  if (channelKeys[currentChannel]) {
+    title = encryptMessage(title, channelKeys[currentChannel]);
+    body = body ? encryptMessage(body, channelKeys[currentChannel]) : '';
+    isEncrypted = true;
+  }
+  const msg = { type: 'CreateTopic', channel: currentChannel, title, body: body || '', encrypted: isEncrypted };
   if (ttlVal) msg.ttl_secs = parseInt(ttlVal);
   if (topicPendingAttachments.length > 0) msg.attachments = topicPendingAttachments.map(f => f.id);
   ws.send(JSON.stringify(msg));
@@ -1923,11 +2064,16 @@ function createTopic() {
 
 function sendReply() {
   const input = document.getElementById('reply-input');
-  const content = input.value.trim();
+  let content = input.value.trim();
   if (!content && replyPendingAttachments.length === 0) return;
   if (!currentTopicId) return;
   const ttlVal = document.getElementById('reply-ttl-select').value;
-  const msg = { type: 'TopicReply', topic_id: currentTopicId, content: content || '' };
+  let isEncrypted = false;
+  if (channelKeys[currentChannel] && content) {
+    content = encryptMessage(content, channelKeys[currentChannel]);
+    isEncrypted = true;
+  }
+  const msg = { type: 'TopicReply', topic_id: currentTopicId, content: content || '', encrypted: isEncrypted };
   if (ttlVal) msg.ttl_secs = parseInt(ttlVal);
   if (replyPendingAttachments.length > 0) msg.attachments = replyPendingAttachments.map(f => f.id);
   ws.send(JSON.stringify(msg));
@@ -1948,7 +2094,23 @@ function handleReplyKey(e) {
 }
 
 function renderThread(topic, replies) {
-  document.getElementById('thread-title').textContent = topic.title;
+  let displayTitle = topic.title;
+  let displayBody = topic.body;
+  let encBadge = '';
+  if (topic.encrypted) {
+    const ch = topic.channel || currentChannel;
+    if (channelKeys[ch]) {
+      const decTitle = decryptMessage(topic.title, channelKeys[ch]);
+      displayTitle = decTitle !== null ? decTitle : '[Encrypted - decryption failed]';
+      const decBody = topic.body ? decryptMessage(topic.body, channelKeys[ch]) : '';
+      displayBody = decBody !== null ? decBody : '[Encrypted - decryption failed]';
+    } else {
+      displayTitle = '[Encrypted - key unavailable]';
+      displayBody = '[Encrypted - key unavailable]';
+    }
+    encBadge = ' <span class="ttl" style="color:var(--green);">[E2E]</span>';
+  }
+  document.getElementById('thread-title').innerHTML = escapeHtml(displayTitle) + encBadge;
   currentTopicPinned = topic.pinned;
   currentTopicAuthor = topic.author;
   document.getElementById('thread-pin-btn').textContent = topic.pinned ? 'Unpin' : 'Pin';
@@ -1963,9 +2125,10 @@ function renderThread(topic, replies) {
   document.getElementById('thread-meta').textContent = `by ${topic.author} \u00B7 ${time}`;
   const bodyEl = document.getElementById('thread-body');
   bodyEl.setAttribute('data-topic-id', topic.id);
-  bodyEl.setAttribute('data-topic-body', topic.body);
-  bodyEl.setAttribute('data-topic-title', topic.title);
-  bodyEl.innerHTML = `<div class="meta"><span class="author">${escapeHtml(topic.author)}</span> <span class="time">${time}</span>${ttlHtml}${editedHtml}</div><div class="body">${renderRichContent(topic.body)}</div>${renderAttachmentsHtml(topic.attachments)}`;
+  bodyEl.setAttribute('data-topic-body', displayBody);
+  bodyEl.setAttribute('data-topic-title', displayTitle);
+  bodyEl.setAttribute('data-topic-encrypted', topic.encrypted ? '1' : '0');
+  bodyEl.innerHTML = `<div class="meta"><span class="author">${escapeHtml(topic.author)}</span> <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}</div><div class="body">${renderRichContent(displayBody)}</div>${renderAttachmentsHtml(topic.attachments)}`;
   const repliesEl = document.getElementById('thread-replies');
   repliesEl.innerHTML = '';
   replies.forEach(r => appendTopicReply(r));
@@ -1977,7 +2140,22 @@ function appendTopicReply(reply) {
   div.className = 'msg';
   div.setAttribute('data-reply-id', reply.id);
   div.setAttribute('data-author', reply.author);
-  div.setAttribute('data-content', reply.content);
+  div.setAttribute('data-encrypted', reply.encrypted ? '1' : '0');
+
+  let displayContent = reply.content;
+  let encBadge = '';
+  if (reply.encrypted) {
+    if (channelKeys[currentChannel]) {
+      const dec = decryptMessage(reply.content, channelKeys[currentChannel]);
+      displayContent = dec !== null ? dec : '[Encrypted - decryption failed]';
+    } else {
+      displayContent = '[Encrypted - key unavailable]';
+    }
+    encBadge = '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+  }
+  div.setAttribute('data-content', displayContent);
+  div.setAttribute('data-raw-content', reply.content);
+
   const time = new Date(reply.created_at).toLocaleString();
   let ttlHtml = renderTtlBadge(reply.expires_at);
   let editedHtml = reply.edited_at ? '<span class="edited">(edited)</span>' : '';
@@ -1992,7 +2170,7 @@ function appendTopicReply(reply) {
     actionsHtml += '</div>';
   }
 
-  div.innerHTML = `${actionsHtml}<div class="meta"><span class="author">${escapeHtml(reply.author)}</span> <span class="time">${time}</span>${ttlHtml}${editedHtml}</div><div class="body">${renderRichContent(reply.content)}</div>${renderAttachmentsHtml(reply.attachments)}`;
+  div.innerHTML = `${actionsHtml}<div class="meta"><span class="author">${escapeHtml(reply.author)}</span> <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}</div><div class="body">${renderRichContent(displayContent)}</div>${renderAttachmentsHtml(reply.attachments)}`;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
 }
@@ -2016,9 +2194,17 @@ function startEditTopic() {
 }
 
 function saveEditTopic() {
-  const title = document.getElementById('edit-topic-title').value.trim();
-  const body = document.getElementById('edit-topic-body').value;
-  const msg = { type: 'EditTopic', topic_id: currentTopicId };
+  let title = document.getElementById('edit-topic-title').value.trim();
+  let body = document.getElementById('edit-topic-body').value;
+  const bodyEl = document.getElementById('thread-body');
+  const wasEncrypted = bodyEl && bodyEl.getAttribute('data-topic-encrypted') === '1';
+  let isEncrypted = false;
+  if (channelKeys[currentChannel] && wasEncrypted) {
+    if (title) title = encryptMessage(title, channelKeys[currentChannel]);
+    body = body ? encryptMessage(body, channelKeys[currentChannel]) : '';
+    isEncrypted = true;
+  }
+  const msg = { type: 'EditTopic', topic_id: currentTopicId, encrypted: isEncrypted };
   if (title) msg.title = title;
   msg.body = body;
   ws.send(JSON.stringify(msg));
@@ -2049,7 +2235,15 @@ function startEditReply(replyId) {
 function saveEditReply(replyId) {
   const textarea = document.getElementById('edit-reply-textarea');
   if (!textarea) return;
-  ws.send(JSON.stringify({ type: 'EditTopicReply', reply_id: replyId, content: textarea.value }));
+  let content = textarea.value;
+  const replyEl = document.querySelector(`.msg[data-reply-id="${replyId}"]`);
+  const wasEncrypted = replyEl && replyEl.getAttribute('data-encrypted') === '1';
+  let isEncrypted = false;
+  if (channelKeys[currentChannel] && wasEncrypted) {
+    content = encryptMessage(content, channelKeys[currentChannel]);
+    isEncrypted = true;
+  }
+  ws.send(JSON.stringify({ type: 'EditTopicReply', reply_id: replyId, content, encrypted: isEncrypted }));
 }
 
 function cancelEditReply(replyId) {

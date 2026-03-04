@@ -83,17 +83,41 @@ impl Hub {
     pub async fn authenticate(&self, id: usize, token: &str) -> Result<String, String> {
         let username = self.db.validate_token(token).ok_or("Invalid token")?;
 
+        // Get user's DM channels before locking clients
+        let user_dms = self.db.list_user_dms(&username);
+
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.get_mut(&id) {
             client.username = username.clone();
             // Auto-join general
             client.channels.insert("general".to_string());
+            // Auto-join all DM channels
+            for dm in &user_dms {
+                client.channels.insert(dm.channel.clone());
+            }
         }
 
         // Send channel list
         let channels = self.channel_list_inner(&clients);
         if let Some(client) = clients.get(&id) {
             let _ = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels });
+        }
+
+        // Send DM list
+        if !user_dms.is_empty() {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::DMList { dms: user_dms.clone() });
+                // Send channel keys for DM channels
+                for dm in &user_dms {
+                    if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&dm.channel, &username) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                            channel: dm.channel.clone(),
+                            encrypted_key,
+                            key_version,
+                        });
+                    }
+                }
+            }
         }
 
         // Broadcast updated online users
@@ -180,8 +204,22 @@ impl Hub {
             }
 
             ClientMsg::Join { channel } => {
-                // Check channel creation permission
-                if !self.db.channel_exists(&channel) {
+                // DM channels: only members can join, no creation via Join
+                if Db::is_dm_channel(&channel) {
+                    let clients = self.clients.lock().await;
+                    let username = match clients.get(&id) {
+                        Some(c) if !c.username.is_empty() => c.username.clone(),
+                        _ => return,
+                    };
+                    if !self.db.is_dm_member(&channel, &username) {
+                        if let Some(client) = clients.get(&id) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot join this DM channel"));
+                        }
+                        return;
+                    }
+                    drop(clients);
+                } else if !self.db.channel_exists(&channel) {
+                    // Check channel creation permission
                     let clients = self.clients.lock().await;
                     let username = match clients.get(&id) {
                         Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -369,7 +407,7 @@ impl Hub {
                 }
             }
 
-            ClientMsg::CreateTopic { channel, title, body, ttl_secs, attachments } => {
+            ClientMsg::CreateTopic { channel, title, body, ttl_secs, attachments, encrypted } => {
                 let clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
                     Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -382,7 +420,7 @@ impl Hub {
                 let expires_at = ttl_secs.map(|s| (now + Duration::seconds(s as i64)).to_rfc3339());
                 if let Err(e) = self.db.create_topic(
                     &topic_id, &channel, &title, &body, &username,
-                    expires_at.as_deref(), attachments.as_ref(),
+                    expires_at.as_deref(), attachments.as_ref(), encrypted,
                 ) {
                     if let Some(client) = clients.get(&id) {
                         let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
@@ -400,6 +438,7 @@ impl Hub {
                     reply_count: 0,
                     last_activity: now_str,
                     expires_at,
+                    encrypted,
                 };
                 Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::TopicCreated { topic: summary }, None);
             }
@@ -428,7 +467,7 @@ impl Hub {
                 }
             }
 
-            ClientMsg::TopicReply { topic_id, content, ttl_secs, attachments } => {
+            ClientMsg::TopicReply { topic_id, content, ttl_secs, attachments, encrypted } => {
                 let clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
                     Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -441,7 +480,7 @@ impl Hub {
                 let expires_at = ttl_secs.map(|s| (now + Duration::seconds(s as i64)).to_rfc3339());
                 if let Err(e) = self.db.create_topic_reply(
                     &reply_id, &topic_id, &username, &content,
-                    expires_at.as_deref(), attachments.as_ref(),
+                    expires_at.as_deref(), attachments.as_ref(), encrypted,
                 ) {
                     if let Some(client) = clients.get(&id) {
                         let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
@@ -471,6 +510,7 @@ impl Hub {
                     expires_at,
                     attachments: file_infos,
                     edited_at: None,
+                    encrypted,
                 };
                 Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::TopicReplyAdded { topic_id, reply }, None);
             }
@@ -600,7 +640,7 @@ impl Hub {
                 }
             }
 
-            ClientMsg::EditTopic { topic_id, title, body } => {
+            ClientMsg::EditTopic { topic_id, title, body, encrypted } => {
                 let clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
                     Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -634,7 +674,7 @@ impl Hub {
                     Ok(ch) => {
                         let now = Utc::now().to_rfc3339();
                         Self::broadcast_to_channel_inner(&clients, &ch, &ServerMsg::TopicEdited {
-                            topic_id, channel: ch.clone(), title, body, edited_at: now,
+                            topic_id, channel: ch.clone(), title, body, edited_at: now, encrypted,
                         }, None);
                     }
                     Err(e) => {
@@ -692,7 +732,7 @@ impl Hub {
                 }
             }
 
-            ClientMsg::EditTopicReply { reply_id, content } => {
+            ClientMsg::EditTopicReply { reply_id, content, encrypted } => {
                 let clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
                     Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -728,7 +768,7 @@ impl Hub {
                         // Broadcast to the topic's channel
                         if let Some(topic) = self.db.get_topic(&topic_id) {
                             Self::broadcast_to_channel_inner(&clients, &topic.channel, &ServerMsg::TopicReplyEdited {
-                                reply_id, topic_id, content, edited_at: now,
+                                reply_id, topic_id, content, edited_at: now, encrypted,
                             }, None);
                         }
                     }
@@ -1208,6 +1248,129 @@ impl Hub {
                     key_version: new_version,
                 }, None);
             }
+
+            // ── Direct Messages ─────────────────────────────────────
+
+            ClientMsg::StartDM { target_user } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                drop(clients);
+
+                if target_user == username {
+                    let clients = self.clients.lock().await;
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot DM yourself"));
+                    }
+                    return;
+                }
+
+                // Compute canonical DM channel name
+                let mut names = [username.clone(), target_user.clone()];
+                names.sort();
+                let dm_channel = format!("dm:{}:{}", names[0], names[1]);
+
+                let channel_exists = self.db.channel_exists(&dm_channel);
+
+                if !channel_exists {
+                    // Create channel
+                    self.db.ensure_channel(&dm_channel);
+                    // Mark as encrypted
+                    self.db.set_channel_encrypted(&dm_channel, &username);
+                    // Add both users as DM members
+                    self.db.add_dm_member(&dm_channel, &username);
+                    self.db.add_dm_member(&dm_channel, &target_user);
+
+                    // Generate channel key and seal for self
+                    // The client side handles the actual key generation and sealing
+                }
+
+                // Auto-join the requester to the DM channel
+                let mut clients = self.clients.lock().await;
+                if let Some(c) = clients.get_mut(&id) {
+                    c.channels.insert(dm_channel.clone());
+                }
+
+                // Send history to requester
+                let history = self.db.get_history(&dm_channel, 100);
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::History {
+                        channel: dm_channel.clone(),
+                        messages: history,
+                    });
+                }
+
+                // If channel is encrypted, deliver channel key or request it
+                if self.db.is_channel_encrypted(&dm_channel) {
+                    if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&dm_channel, &username) {
+                        if let Some(client) = clients.get(&id) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                                channel: dm_channel.clone(),
+                                encrypted_key,
+                                key_version,
+                            });
+                        }
+                    }
+                }
+
+                // Send DMStarted to requester (initiated=true only for NEW channels so they generate the key)
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::DMStarted {
+                        channel: dm_channel.clone(),
+                        other_user: target_user.clone(),
+                        initiated: !channel_exists,
+                    });
+                }
+
+                // If target is online, auto-join them and notify
+                let target_ids: Vec<usize> = clients.iter()
+                    .filter(|(_, c)| c.username == target_user)
+                    .map(|(cid, _)| *cid)
+                    .collect();
+                for tid in &target_ids {
+                    if let Some(c) = clients.get_mut(tid) {
+                        c.channels.insert(dm_channel.clone());
+                    }
+                }
+                for tid in &target_ids {
+                    if let Some(client) = clients.get(tid) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::DMStarted {
+                            channel: dm_channel.clone(),
+                            other_user: username.clone(),
+                            initiated: false,
+                        });
+                        // Send history to target
+                        let history = self.db.get_history(&dm_channel, 100);
+                        let _ = Self::send_to(&client.tx, &ServerMsg::History {
+                            channel: dm_channel.clone(),
+                            messages: history,
+                        });
+                        // Send channel key if available
+                        if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&dm_channel, &target_user) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                                channel: dm_channel.clone(),
+                                encrypted_key,
+                                key_version,
+                            });
+                        }
+                    }
+                }
+            }
+
+            ClientMsg::ListDMs => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                let dms = self.db.list_user_dms(&username);
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::DMList { dms });
+                }
+            }
         }
     }
 
@@ -1287,6 +1450,7 @@ impl Hub {
         let db_channels = self.db.list_channels();
         db_channels
             .into_iter()
+            .filter(|name| !Db::is_dm_channel(name))
             .map(|name| {
                 let user_count = clients
                     .values()
