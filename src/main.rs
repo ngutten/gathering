@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
 use crate::db::Db;
@@ -115,6 +116,10 @@ async fn main() {
         .route("/api/files/:id", get(handle_download))
         .route("/ws", get(ws_upgrade))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
+        .layer(CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any))
         .layer(Extension(state));
 
     let port: u16 = std::env::var("GATHERING_PORT")
@@ -127,33 +132,17 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(port + 1);
 
-    // HTTP redirect router: sends all requests to HTTPS on the main port
-    let redirect_port = port;
-    let redirect_app = Router::new().fallback(
-        move |headers: http::HeaderMap, uri: http::Uri| async move {
-            let host = headers
-                .get(http::header::HOST)
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("localhost");
-            let host_name = host.split(':').next().unwrap_or(host);
-            let path = uri
-                .path_and_query()
-                .map(|pq| pq.as_str())
-                .unwrap_or("/");
-            Redirect::temporary(&format!("https://{}:{}{}", host_name, redirect_port, path))
-        },
-    );
-
     let tls_addr = SocketAddr::from(([0, 0, 0, 0], port));
     let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));
 
-    tracing::info!("Gathering HTTPS (app)      on https://{}", tls_addr);
-    tracing::info!("Gathering HTTP  (redirect) on http://{}", http_addr);
+    tracing::info!("Gathering HTTPS on https://{}", tls_addr);
+    tracing::info!("Gathering HTTP  on http://{}", http_addr);
 
-    // Spawn HTTP redirect server on secondary port
+    // Spawn HTTP server on secondary port (full app, for native clients)
+    let http_app = app.clone();
     tokio::spawn(async move {
         axum::Server::bind(&http_addr)
-            .serve(redirect_app.into_make_service())
+            .serve(http_app.into_make_service())
             .await
             .unwrap();
     });

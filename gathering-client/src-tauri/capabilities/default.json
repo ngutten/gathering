@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the Gathering client",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "notification:default"
+  ]
+}

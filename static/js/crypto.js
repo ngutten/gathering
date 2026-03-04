@@ -1,0 +1,199 @@
+// crypto.js — E2E encryption: key management, encrypt/decrypt, key approval UI
+
+import state, { emit } from './state.js';
+import { send } from './transport.js';
+import { escapeHtml } from './render.js';
+
+export async function initE2E() {
+  // Wait for libsodium to be loaded by the shim
+  while (typeof sodium === 'undefined' || !sodium.ready) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  await sodium.ready;
+  // Load or generate X25519 keypair
+  const storedSk = localStorage.getItem('gathering_e2e_sk');
+  const storedPk = localStorage.getItem('gathering_e2e_pk');
+  if (storedSk && storedPk) {
+    state.myKeyPair = {
+      privateKey: sodium.from_base64(storedSk),
+      publicKey: sodium.from_base64(storedPk),
+    };
+  } else {
+    const kp = sodium.crypto_box_keypair();
+    state.myKeyPair = { publicKey: kp.publicKey, privateKey: kp.privateKey };
+    localStorage.setItem('gathering_e2e_sk', sodium.to_base64(kp.privateKey));
+    localStorage.setItem('gathering_e2e_pk', sodium.to_base64(kp.publicKey));
+    if (!localStorage.getItem('gathering_e2e_warned')) {
+      localStorage.setItem('gathering_e2e_warned', '1');
+      setTimeout(() => emit('system-message', 'E2E keypair generated. Export your key from the sidebar to back it up. If lost, encrypted history cannot be recovered.'), 500);
+    }
+  }
+  state.e2eReady = true;
+  send('UploadPublicKey', { public_key: sodium.to_base64(state.myKeyPair.publicKey) });
+}
+
+export function generateChannelKey() {
+  return sodium.crypto_aead_xchacha20poly1305_ietf_keygen();
+}
+
+export function encryptMessage(plaintext, channelKey) {
+  const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  const encoder = new TextEncoder();
+  const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    encoder.encode(plaintext), null, null, nonce, channelKey
+  );
+  const payload = new Uint8Array(1 + nonce.length + ciphertext.length);
+  payload[0] = 0x01;
+  payload.set(nonce, 1);
+  payload.set(ciphertext, 1 + nonce.length);
+  return sodium.to_base64(payload);
+}
+
+export function decryptMessage(base64Payload, channelKey) {
+  try {
+    const payload = sodium.from_base64(base64Payload);
+    if (payload[0] !== 0x01) return null;
+    const nonce = payload.slice(1, 1 + sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    const ciphertext = payload.slice(1 + sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    const plainBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null, ciphertext, null, nonce, channelKey
+    );
+    return new TextDecoder().decode(plainBytes);
+  } catch (e) {
+    return null;
+  }
+}
+
+export function encryptChannelKeyForUser(channelKey, recipientPubKeyBase64) {
+  const recipientPk = sodium.from_base64(recipientPubKeyBase64);
+  const sealed = sodium.crypto_box_seal(channelKey, recipientPk);
+  return sodium.to_base64(sealed);
+}
+
+export function decryptChannelKey(encryptedKeyBase64) {
+  try {
+    const sealed = sodium.from_base64(encryptedKeyBase64);
+    return sodium.crypto_box_seal_open(sealed, state.myKeyPair.publicKey, state.myKeyPair.privateKey);
+  } catch (e) {
+    return null;
+  }
+}
+
+export function getKeyFingerprint() {
+  if (!state.myKeyPair) return '';
+  const hash = sodium.crypto_generichash(32, state.myKeyPair.publicKey);
+  return sodium.to_hex(hash).substring(0, 16);
+}
+
+export function exportPrivateKey() {
+  if (!state.myKeyPair) return;
+  const data = JSON.stringify({
+    sk: sodium.to_base64(state.myKeyPair.privateKey),
+    pk: sodium.to_base64(state.myKeyPair.publicKey),
+  });
+  const blob = new Blob([data], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `gathering-key-${state.currentUser}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+export function importPrivateKey() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+      const data = JSON.parse(text);
+      const sk = sodium.from_base64(data.sk);
+      const pk = sodium.from_base64(data.pk);
+      state.myKeyPair = { privateKey: sk, publicKey: pk };
+      localStorage.setItem('gathering_e2e_sk', data.sk);
+      localStorage.setItem('gathering_e2e_pk', data.pk);
+      send('UploadPublicKey', { public_key: data.pk });
+      emit('system-message', 'Key imported successfully. Re-request channel keys to decrypt history.');
+      state.channelKeys = {};
+      updateKeyUI();
+    } catch (err) {
+      emit('system-message', 'Failed to import key: ' + err.message);
+    }
+  };
+  input.click();
+}
+
+export function updateKeyUI() {
+  const fp = document.getElementById('key-fingerprint');
+  if (fp) fp.textContent = getKeyFingerprint();
+}
+
+export function showKeyApproval(channel, user, publicKey) {
+  if (state.pendingKeyRequests.some(r => r.channel === channel && r.user === user)) return;
+  state.pendingKeyRequests.push({ channel, user, publicKey });
+  renderKeyRequests();
+}
+
+export function approveKeyRequest(index) {
+  const req = state.pendingKeyRequests[index];
+  if (!req || !state.channelKeys[req.channel]) return;
+  const sealed = encryptChannelKeyForUser(state.channelKeys[req.channel], req.publicKey);
+  send('ProvideChannelKey', {
+    channel: req.channel,
+    target_user: req.user,
+    encrypted_key: sealed,
+  });
+  state.publicKeyCache[req.user] = req.publicKey;
+  state.pendingKeyRequests.splice(index, 1);
+  renderKeyRequests();
+  emit('system-message', `Granted ${req.user} access to #${req.channel}`);
+}
+
+export function denyKeyRequest(index) {
+  const req = state.pendingKeyRequests[index];
+  state.pendingKeyRequests.splice(index, 1);
+  renderKeyRequests();
+  if (req) emit('system-message', `Denied ${req.user} access to #${req.channel}`);
+}
+
+export function renderKeyRequests() {
+  let el = document.getElementById('key-requests');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'key-requests';
+    const sidebar = document.querySelector('.sidebar');
+    const bottom = sidebar.querySelector('.sidebar-bottom');
+    sidebar.insertBefore(el, bottom);
+  }
+  if (state.pendingKeyRequests.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = '<div style="padding:0.3rem 1rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border);">' +
+    '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--orange);letter-spacing:0.05em;margin-bottom:0.3rem;">Key Requests</div>' +
+    state.pendingKeyRequests.map((r, i) =>
+      `<div style="font-size:0.75rem;margin-bottom:0.4rem;padding:0.3rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;">` +
+      `<div><strong>${escapeHtml(r.user)}</strong> wants access to <strong>#${escapeHtml(r.channel)}</strong></div>` +
+      `<div style="display:flex;gap:0.3rem;margin-top:0.2rem;">` +
+      `<button onclick="approveKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--green);color:#000;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Approve</button>` +
+      `<button onclick="denyKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--red);color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Deny</button>` +
+      `</div></div>`
+    ).join('') +
+    '</div>';
+}
+
+export async function triggerKeyRotation(channel, excludeUser) {
+  if (!state.e2eReady || !state.channelKeys[channel]) return;
+  const newKey = generateChannelKey();
+  state.channelKeys[channel] = newKey;
+  const newKeys = {};
+  newKeys[state.currentUser] = encryptChannelKeyForUser(newKey, sodium.to_base64(state.myKeyPair.publicKey));
+  for (const [user, pk] of Object.entries(state.publicKeyCache)) {
+    if (user !== excludeUser && user !== state.currentUser) {
+      newKeys[user] = encryptChannelKeyForUser(newKey, pk);
+    }
+  }
+  send('RotateChannelKey', { channel, new_keys: newKeys });
+}
