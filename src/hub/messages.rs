@@ -16,7 +16,9 @@ impl Hub {
             Some(i) => i,
             None => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Message not found"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Message not found")) {
+                        eprintln!("[hub::messages] send message not found error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -24,13 +26,17 @@ impl Hub {
         let (_channel, author) = info;
         if author != username {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Can only edit your own messages"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Can only edit your own messages")) {
+                    eprintln!("[hub::messages] send edit ownership error failed: {e:?}");
+                }
             }
             return;
         }
         if !self.db.user_has_permission(&username, "edit_own_message") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::messages] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -44,7 +50,9 @@ impl Hub {
             }
             Err(e) => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                        eprintln!("[hub::messages] send edit_message error failed: {e:?}");
+                    }
                 }
             }
         }
@@ -61,7 +69,9 @@ impl Hub {
             Some(i) => i,
             None => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Message not found"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Message not found")) {
+                        eprintln!("[hub::messages] send message not found error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -70,14 +80,18 @@ impl Hub {
         if author == username {
             if !self.db.user_has_permission(&username, "delete_own_message") {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                        eprintln!("[hub::messages] send permission denied error failed: {e:?}");
+                    }
                 }
                 return;
             }
         } else {
             if !self.db.user_has_permission(&username, "delete_any_message") {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                        eprintln!("[hub::messages] send permission denied error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -91,7 +105,9 @@ impl Hub {
             }
             Err(e) => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                        eprintln!("[hub::messages] send delete_message error failed: {e:?}");
+                    }
                 }
             }
         }

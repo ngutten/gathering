@@ -2,8 +2,8 @@
 
 import state from './state.js';
 import { send, apiFetch } from './transport.js';
-import { encryptMessage, decryptMessage } from './crypto.js';
-import { escapeHtml, renderRichContent, formatFileSize, formatTimeAgo, renderTtlBadge, renderAttachmentsHtml, decryptAndRenderAttachments, isImageMime, isAudioMime, isVideoMime } from './render.js';
+import { tryEncrypt, tryDecrypt } from './crypto.js';
+import { escapeHtml, renderRichContent, formatFileSize, formatTimeAgo, renderTtlBadge, renderEncryptedBadge, renderAttachmentsHtml, decryptAndRenderAttachments, isImageMime, isAudioMime, isVideoMime } from './render.js';
 
 export function switchView(view) {
   state.currentView = view;
@@ -29,14 +29,8 @@ export function renderTopicList(topics) {
     let displayTitle = t.title;
     let encBadge = '';
     if (t.encrypted) {
-      const ch = t.channel || state.currentChannel;
-      if (state.channelKeys[ch]) {
-        const dec = decryptMessage(t.title, state.channelKeys[ch]);
-        displayTitle = dec !== null ? dec : '[Encrypted - decryption failed]';
-      } else {
-        displayTitle = '[Encrypted - key unavailable]';
-      }
-      encBadge = '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+      displayTitle = tryDecrypt(t.title, t.channel || state.currentChannel);
+      encBadge = renderEncryptedBadge(true);
     }
     return `<div class="topic-item${t.pinned ? ' pinned' : ''}" onclick="openTopic('${escapeHtml(t.id)}')">
       <div class="topic-title">${t.pinned ? '<span class="topic-pin-icon">&#x1F4CC;</span>' : ''}${escapeHtml(displayTitle)}${encBadge}</div>
@@ -64,13 +58,9 @@ export function createTopic() {
   let body = bodyEl.value.trim();
   if (!title) return;
   const ttlVal = document.getElementById('topic-ttl-select').value;
-  let isEncrypted = false;
-  if (state.channelKeys[state.currentChannel]) {
-    title = encryptMessage(title, state.channelKeys[state.currentChannel]);
-    body = body ? encryptMessage(body, state.channelKeys[state.currentChannel]) : '';
-    isEncrypted = true;
-  }
-  const msg = { channel: state.currentChannel, title, body: body || '', encrypted: isEncrypted };
+  const encTitle = tryEncrypt(title, state.currentChannel);
+  const encBody = body ? tryEncrypt(body, state.currentChannel) : { content: '', encrypted: false };
+  const msg = { channel: state.currentChannel, title: encTitle.content, body: encBody.content, encrypted: encTitle.encrypted };
   if (ttlVal) msg.ttl_secs = parseInt(ttlVal);
   if (state.topicPendingAttachments.length > 0) msg.attachments = state.topicPendingAttachments.map(f => f.id);
   send('CreateTopic', msg);
@@ -86,12 +76,8 @@ export function sendReply() {
   if (!content && state.replyPendingAttachments.length === 0) return;
   if (!state.currentTopicId) return;
   const ttlVal = document.getElementById('reply-ttl-select').value;
-  let isEncrypted = false;
-  if (state.channelKeys[state.currentChannel] && content) {
-    content = encryptMessage(content, state.channelKeys[state.currentChannel]);
-    isEncrypted = true;
-  }
-  const msg = { topic_id: state.currentTopicId, content: content || '', encrypted: isEncrypted };
+  const enc = tryEncrypt(content || '', state.currentChannel);
+  const msg = { topic_id: state.currentTopicId, content: enc.content, encrypted: enc.encrypted };
   if (ttlVal) msg.ttl_secs = parseInt(ttlVal);
   if (state.replyPendingAttachments.length > 0) msg.attachments = state.replyPendingAttachments.map(f => f.id);
   send('TopicReply', msg);
@@ -117,16 +103,9 @@ export function renderThread(topic, replies) {
   let encBadge = '';
   if (topic.encrypted) {
     const ch = topic.channel || state.currentChannel;
-    if (state.channelKeys[ch]) {
-      const decTitle = decryptMessage(topic.title, state.channelKeys[ch]);
-      displayTitle = decTitle !== null ? decTitle : '[Encrypted - decryption failed]';
-      const decBody = topic.body ? decryptMessage(topic.body, state.channelKeys[ch]) : '';
-      displayBody = decBody !== null ? decBody : '[Encrypted - decryption failed]';
-    } else {
-      displayTitle = '[Encrypted - key unavailable]';
-      displayBody = '[Encrypted - key unavailable]';
-    }
-    encBadge = ' <span class="ttl" style="color:var(--green);">[E2E]</span>';
+    displayTitle = tryDecrypt(topic.title, ch);
+    displayBody = topic.body ? tryDecrypt(topic.body, ch) : '';
+    encBadge = ' ' + renderEncryptedBadge(true);
   }
   document.getElementById('thread-title').innerHTML = escapeHtml(displayTitle) + encBadge;
   state.currentTopicPinned = topic.pinned;
@@ -163,13 +142,8 @@ export function appendTopicReply(reply) {
   let displayContent = reply.content;
   let encBadge = '';
   if (reply.encrypted) {
-    if (state.channelKeys[state.currentChannel]) {
-      const dec = decryptMessage(reply.content, state.channelKeys[state.currentChannel]);
-      displayContent = dec !== null ? dec : '[Encrypted - decryption failed]';
-    } else {
-      displayContent = '[Encrypted - key unavailable]';
-    }
-    encBadge = '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+    displayContent = tryDecrypt(reply.content, state.currentChannel);
+    encBadge = renderEncryptedBadge(true);
   }
   div.setAttribute('data-content', displayContent);
   div.setAttribute('data-raw-content', reply.content);
@@ -215,10 +189,12 @@ export function saveEditTopic() {
   const bodyEl = document.getElementById('thread-body');
   const wasEncrypted = bodyEl && bodyEl.getAttribute('data-topic-encrypted') === '1';
   let isEncrypted = false;
-  if (state.channelKeys[state.currentChannel] && wasEncrypted) {
-    if (title) title = encryptMessage(title, state.channelKeys[state.currentChannel]);
-    body = body ? encryptMessage(body, state.channelKeys[state.currentChannel]) : '';
-    isEncrypted = true;
+  if (wasEncrypted) {
+    const encTitle = title ? tryEncrypt(title, state.currentChannel) : { content: '', encrypted: false };
+    const encBody = body ? tryEncrypt(body, state.currentChannel) : { content: '', encrypted: false };
+    title = encTitle.content || title;
+    body = encBody.content || body;
+    isEncrypted = encTitle.encrypted;
   }
   const msg = { topic_id: state.currentTopicId, encrypted: isEncrypted };
   if (title) msg.title = title;
@@ -254,9 +230,10 @@ export function saveEditReply(replyId) {
   const replyEl = document.querySelector(`.msg[data-reply-id="${replyId}"]`);
   const wasEncrypted = replyEl && replyEl.getAttribute('data-encrypted') === '1';
   let isEncrypted = false;
-  if (state.channelKeys[state.currentChannel] && wasEncrypted) {
-    content = encryptMessage(content, state.channelKeys[state.currentChannel]);
-    isEncrypted = true;
+  if (wasEncrypted) {
+    const enc = tryEncrypt(content, state.currentChannel);
+    content = enc.content;
+    isEncrypted = enc.encrypted;
   }
   send('EditTopicReply', { reply_id: replyId, content, encrypted: isEncrypted });
 }

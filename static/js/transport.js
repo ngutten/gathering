@@ -3,6 +3,8 @@
 import { wsUrl, apiUrl } from './config.js';
 import state, { emit } from './state.js';
 
+const RECONNECT_DELAY_MS = 3000;
+
 export function connectWS() {
   state.ws = new WebSocket(wsUrl());
 
@@ -11,13 +13,21 @@ export function connectWS() {
   };
 
   state.ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    emit('server-message', msg);
+    try {
+      const msg = JSON.parse(e.data);
+      if (!msg || !msg.type) {
+        console.warn('WS message missing type:', msg);
+        return;
+      }
+      emit('server-message', msg);
+    } catch (err) {
+      console.error('WS JSON parse error:', err);
+    }
   };
 
   state.ws.onclose = () => {
     emit('ws-closed');
-    setTimeout(() => { if (state.token) connectWS(); }, 3000);
+    setTimeout(() => { if (state.token) connectWS(); }, RECONNECT_DELAY_MS);
   };
 }
 

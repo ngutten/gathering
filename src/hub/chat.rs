@@ -4,6 +4,11 @@ use super::Hub;
 use crate::db::Db;
 use crate::protocol::ServerMsg;
 
+const MAX_MESSAGE_SIZE: usize = 32 * 1024; // 32KB
+const MAX_CHANNEL_NAME_LEN: usize = 64;
+const DEFAULT_HISTORY_LIMIT: u32 = 100;
+const MAX_HISTORY_LIMIT: u32 = 100;
+
 impl Hub {
     pub(super) async fn handle_send(
         &self,
@@ -15,7 +20,7 @@ impl Hub {
         encrypted: bool,
     ) {
         // Input validation (S11)
-        if content.len() > 32 * 1024 {
+        if content.len() > MAX_MESSAGE_SIZE {
             self.send_error(id, "Message too long (max 32KB)").await;
             return;
         }
@@ -29,7 +34,9 @@ impl Hub {
         // Channel membership check (S7)
         if !in_channel {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel")) {
+                    eprintln!("[hub::chat] send membership error failed: {e:?}");
+                }
             }
             return;
         }
@@ -37,7 +44,9 @@ impl Hub {
         // Permission check (S8)
         if !self.db.user_has_permission(&username, "send_message") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied: send_message"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied: send_message")) {
+                    eprintln!("[hub::chat] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -72,7 +81,7 @@ impl Hub {
 
     pub(super) async fn handle_join(&self, id: usize, channel: String) {
         // Input validation (S11)
-        if channel.len() > 64 || (!Db::is_dm_channel(&channel) && !channel.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')) {
+        if channel.len() > MAX_CHANNEL_NAME_LEN || (!Db::is_dm_channel(&channel) && !channel.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')) {
             self.send_error(id, "Invalid channel name (max 64 chars, alphanumeric/_/- only)").await;
             return;
         }
@@ -86,7 +95,9 @@ impl Hub {
             };
             if !self.db.is_dm_member(&channel, &username) {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot join this DM channel"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Cannot join this DM channel")) {
+                        eprintln!("[hub::chat] send DM join denied error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -100,7 +111,9 @@ impl Hub {
             };
             if !self.db.can_access_channel(&channel, &username) {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted")) {
+                        eprintln!("[hub::chat] send channel access denied error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -115,7 +128,9 @@ impl Hub {
             let creation_mode = self.db.get_setting("channel_creation").unwrap_or_else(|| "all".to_string());
             if creation_mode == "admin" && !self.db.user_has_permission(&username, "create_channel") {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels")) {
+                        eprintln!("[hub::chat] send channel creation denied error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -145,26 +160,30 @@ impl Hub {
         };
 
         // Send history
-        let history = self.db.get_history(&channel, 100);
+        let history = self.db.get_history(&channel, DEFAULT_HISTORY_LIMIT);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(
+            if let Err(e) = Self::send_to(
                 &client.tx,
                 &ServerMsg::History {
                     channel: channel.clone(),
                     messages: history,
                 },
-            );
+            ) {
+                eprintln!("[hub::chat] send channel history on join failed: {e:?}");
+            }
         }
 
         // If channel is encrypted, deliver channel key or request it
         if self.db.is_channel_encrypted(&channel) {
             if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&channel, &username) {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
                         channel: channel.clone(),
                         encrypted_key,
                         key_version,
-                    });
+                    }) {
+                        eprintln!("[hub::chat] send channel key on join failed: {e:?}");
+                    }
                 }
             } else if let Some(pub_key) = self.db.get_public_key(&username) {
                 // Broadcast key request to online channel members
@@ -208,7 +227,7 @@ impl Hub {
     }
 
     pub(super) async fn handle_history(&self, id: usize, channel: String, limit: Option<u32>) {
-        let clamped_limit = limit.unwrap_or(100).min(100); // S11: clamp
+        let clamped_limit = limit.unwrap_or(DEFAULT_HISTORY_LIMIT).min(MAX_HISTORY_LIMIT); // S11: clamp
         let clients = self.clients.lock().await;
         let (_username, in_channel) = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
@@ -217,7 +236,9 @@ impl Hub {
         // S7: membership check
         if !in_channel {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel")) {
+                    eprintln!("[hub::chat] send membership error failed: {e:?}");
+                }
             }
             return;
         }
@@ -225,10 +246,12 @@ impl Hub {
         let history = self.db.get_history(&channel, clamped_limit);
         let clients = self.clients.lock().await;
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(
+            if let Err(e) = Self::send_to(
                 &client.tx,
                 &ServerMsg::History { channel, messages: history },
-            );
+            ) {
+                eprintln!("[hub::chat] send history failed: {e:?}");
+            }
         }
     }
 

@@ -6,10 +6,12 @@ use crate::protocol::DMInfo;
 impl Db {
     pub fn add_dm_member(&self, channel: &str, username: &str) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO dm_members(channel, username) VALUES(?1, ?2)",
             params![channel, username],
-        );
+        ) {
+            eprintln!("[db::dms] add_dm_member insert failed: {e}");
+        }
     }
 
     pub fn is_dm_member(&self, channel: &str, username: &str) -> bool {

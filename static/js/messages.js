@@ -2,7 +2,7 @@
 
 import state, { isDMChannel } from './state.js';
 import { send } from './transport.js';
-import { initE2E, updateKeyUI, decryptMessage, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, triggerKeyRotation, renderKeyRequests } from './crypto.js';
+import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, triggerKeyRotation, renderKeyRequests } from './crypto.js';
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
@@ -196,10 +196,8 @@ export function handleServerMsg(msg) {
       if (msgEl) {
         let editedContent = msg.content;
         const wasEncrypted = msgEl.getAttribute('data-encrypted') === '1';
-        if (wasEncrypted && state.channelKeys[msg.channel]) {
-          const dec = decryptMessage(msg.content, state.channelKeys[msg.channel]);
-          if (dec !== null) editedContent = dec;
-          else editedContent = '[Encrypted - decryption failed]';
+        if (wasEncrypted) {
+          editedContent = tryDecrypt(msg.content, msg.channel);
         }
         const bodyEl = msgEl.querySelector('.body');
         if (bodyEl) bodyEl.innerHTML = renderRichContent(editedContent);
@@ -254,11 +252,8 @@ export function handleServerMsg(msg) {
         const replyEl = document.querySelector(`.msg[data-reply-id="${msg.reply_id}"]`);
         if (replyEl) {
           let editedContent = msg.content;
-          if (msg.encrypted && state.channelKeys[state.currentChannel]) {
-            const dec = decryptMessage(msg.content, state.channelKeys[state.currentChannel]);
-            editedContent = dec !== null ? dec : '[Encrypted - decryption failed]';
-          } else if (msg.encrypted) {
-            editedContent = '[Encrypted - key unavailable]';
+          if (msg.encrypted) {
+            editedContent = tryDecrypt(msg.content, state.currentChannel);
           }
           const bodyEl = replyEl.querySelector('.body');
           if (bodyEl) bodyEl.innerHTML = renderRichContent(editedContent);

@@ -182,6 +182,11 @@ export function formatTimeAgo(isoStr) {
   return Math.floor(diff / 86400) + 'd ago';
 }
 
+export function renderEncryptedBadge(encrypted) {
+  if (!encrypted) return '';
+  return '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+}
+
 export function renderTtlBadge(expiresAt) {
   if (!expiresAt) return '';
   const exp = new Date(expiresAt);

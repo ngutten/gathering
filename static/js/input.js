@@ -2,8 +2,12 @@
 
 import state, { isDMChannel } from './state.js';
 import { send, apiFetch } from './transport.js';
-import { encryptMessage, encryptFile, encryptChannelKeyForUser, generateChannelKey } from './crypto.js';
+import { encryptFile, encryptChannelKeyForUser, generateChannelKey, tryEncrypt } from './crypto.js';
 import { escapeHtml, formatFileSize } from './render.js';
+
+const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_INPUT_HEIGHT_PX = 120;
+const TYPING_THROTTLE_MS = 2000;
 
 export function sendMessage() {
   const input = document.getElementById('msg-input');
@@ -11,11 +15,8 @@ export function sendMessage() {
 
   if (state.editingMessageId) {
     if (!content) return;
-    let editContent = content;
-    if (state.channelKeys[state.currentChannel]) {
-      editContent = encryptMessage(content, state.channelKeys[state.currentChannel]);
-    }
-    send('EditMessage', { message_id: state.editingMessageId, content: editContent });
+    const enc = tryEncrypt(content, state.currentChannel);
+    send('EditMessage', { message_id: state.editingMessageId, content: enc.content });
     cancelEdit();
     return;
   }
@@ -25,18 +26,13 @@ export function sendMessage() {
   const ttlSelect = document.getElementById('ttl-select');
   const ttl = ttlSelect.value ? parseInt(ttlSelect.value) : null;
 
-  let finalContent = content || '';
-  let isEncrypted = false;
-  if (state.channelKeys[state.currentChannel] && finalContent) {
-    finalContent = encryptMessage(finalContent, state.channelKeys[state.currentChannel]);
-    isEncrypted = true;
-  }
+  const enc = tryEncrypt(content || '', state.currentChannel);
 
   const msg = {
     channel: state.currentChannel,
-    content: finalContent,
+    content: enc.content,
     ttl_secs: ttl,
-    encrypted: isEncrypted,
+    encrypted: enc.encrypted,
   };
 
   if (state.pendingAttachments.length > 0) {
@@ -83,10 +79,10 @@ export function handleInputKey(e) {
     return;
   }
   e.target.style.height = 'auto';
-  e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+  e.target.style.height = Math.min(e.target.scrollHeight, MAX_INPUT_HEIGHT_PX) + 'px';
 
   const now = Date.now();
-  if (now - state.lastTypingSent > 2000) {
+  if (now - state.lastTypingSent > TYPING_THROTTLE_MS) {
     state.lastTypingSent = now;
     send('Typing', { channel: state.currentChannel });
   }
@@ -99,7 +95,7 @@ export async function handleFileSelect(event) {
   const progress = document.getElementById('upload-progress');
 
   for (const file of files) {
-    if (file.size > 50 * 1024 * 1024) {
+    if (file.size > MAX_UPLOAD_SIZE) {
       progress.textContent = `${file.name}: too large (max 50MB)`;
       continue;
     }

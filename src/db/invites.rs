@@ -10,10 +10,12 @@ impl Db {
         let code = Uuid::new_v4().to_string();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO invite_codes(code, created_by, created_at) VALUES(?1, ?2, ?3)",
             params![code, created_by, now],
-        );
+        ) {
+            eprintln!("[db::invites] create_invite insert failed: {e}");
+        }
         code
     }
 

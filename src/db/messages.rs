@@ -20,11 +20,13 @@ impl Db {
         let ts = timestamp.to_rfc3339();
         let exp = expires_at.map(|e| e.to_rfc3339());
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO messages (id, channel, author, content, timestamp, expires_at, attachments, encrypted)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![id, channel, author, content, ts, exp, att_json, encrypted as i32],
-        );
+        ) {
+            eprintln!("[db::messages] store_message insert failed: {e}");
+        }
     }
 
     pub fn get_history(&self, channel: &str, limit: u32) -> Vec<HistoryMessage> {
@@ -94,10 +96,12 @@ impl Db {
             "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?1",
             params![now],
         ).unwrap_or(0);
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE expires_at IS NOT NULL AND expires_at <= ?1)",
             params![now],
-        );
+        ) {
+            eprintln!("[db::messages] purge expired topic replies failed: {e}");
+        }
         let topics = conn.execute(
             "DELETE FROM topics WHERE expires_at IS NOT NULL AND expires_at <= ?1",
             params![now],

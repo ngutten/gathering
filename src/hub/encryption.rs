@@ -10,7 +10,9 @@ impl Hub {
         };
         self.db.store_public_key(&username, &public_key);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::PublicKeyStored { username });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::PublicKeyStored { username }) {
+                eprintln!("[hub::encryption] send public key stored confirmation failed: {e:?}");
+            }
         }
     }
 
@@ -49,9 +51,11 @@ impl Hub {
         // If we have a stored key for this user, send it directly
         if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&channel, &username) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
                     channel, encrypted_key, key_version,
-                });
+                }) {
+                    eprintln!("[hub::encryption] send channel key data failed: {e:?}");
+                }
             }
         } else if let Some(pub_key) = self.db.get_public_key(&username) {
             // Broadcast request to online channel members
@@ -74,7 +78,9 @@ impl Hub {
         // S10: verify sender is a member of the channel
         if !in_channel {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel")) {
+                    eprintln!("[hub::encryption] send membership error failed: {e:?}");
+                }
             }
             return;
         }
@@ -86,11 +92,13 @@ impl Hub {
         // Forward to target user if online
         for client in clients.values() {
             if client.username == target_user {
-                let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
                     channel: channel.clone(),
                     encrypted_key: encrypted_key.clone(),
                     key_version,
-                });
+                }) {
+                    eprintln!("[hub::encryption] forward channel key to target failed: {e:?}");
+                }
             }
         }
     }

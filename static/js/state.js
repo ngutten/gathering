@@ -67,6 +67,16 @@ const state = {
   // Unread tracking
   unreadCounts: {},
   lastReadTimestamps: {},
+
+  // File manager state
+  fileManagerOpen: false,
+  currentFiles: [],
+  usedBytes: 0,
+  quotaBytes: 0,
+
+  // Search state
+  searchOpen: false,
+  searchResults: [],
 };
 
 // Load last-read timestamps from localStorage

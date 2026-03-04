@@ -14,7 +14,9 @@ impl Hub {
         let is_admin = self.db.user_has_permission(&username, "manage_settings");
         if !is_creator && !is_admin {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can change channel restrictions"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can change channel restrictions")) {
+                    eprintln!("[hub::access] send restriction permission error failed: {e:?}");
+                }
             }
             return;
         }
@@ -52,7 +54,9 @@ impl Hub {
         let is_admin = self.db.user_has_permission(&username, "manage_settings");
         if !is_creator && !is_admin {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can manage members"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can manage members")) {
+                    eprintln!("[hub::access] send member management permission error failed: {e:?}");
+                }
             }
             return;
         }
@@ -80,7 +84,9 @@ impl Hub {
         let is_admin = self.db.user_has_permission(&username, "manage_settings");
         if !is_creator && !is_admin {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can manage members"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can manage members")) {
+                    eprintln!("[hub::access] send member management permission error failed: {e:?}");
+                }
             }
             return;
         }
@@ -113,7 +119,9 @@ impl Hub {
 
         if !self.db.can_access_channel(&channel, &username) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Access denied")) {
+                    eprintln!("[hub::access] send access denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -121,9 +129,11 @@ impl Hub {
         let members = self.db.get_channel_members(&channel);
         let restricted = self.db.is_channel_restricted(&channel);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelMemberList {
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelMemberList {
                 channel, members, restricted,
-            });
+            }) {
+                eprintln!("[hub::access] send channel member list failed: {e:?}");
+            }
         }
     }
 }

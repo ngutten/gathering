@@ -64,6 +64,23 @@ export function decryptMessage(base64Payload, channelKey) {
   }
 }
 
+/** Encrypt content for a channel if a key is available. Returns { content, encrypted }. */
+export function tryEncrypt(content, channel) {
+  const key = state.channelKeys[channel];
+  if (key && content) {
+    return { content: encryptMessage(content, key), encrypted: true };
+  }
+  return { content, encrypted: false };
+}
+
+/** Decrypt content from a channel. Returns decrypted string, or a placeholder on failure. */
+export function tryDecrypt(content, channel) {
+  const key = state.channelKeys[channel];
+  if (!key) return '[Encrypted - key unavailable]';
+  const dec = decryptMessage(content, key);
+  return dec !== null ? dec : '[Encrypted - decryption failed]';
+}
+
 export function encryptChannelKeyForUser(channelKey, recipientPubKeyBase64) {
   const recipientPk = sodium.from_base64(recipientPubKeyBase64);
   const sealed = sodium.crypto_box_seal(channelKey, recipientPk);

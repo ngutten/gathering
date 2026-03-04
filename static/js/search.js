@@ -5,14 +5,11 @@ import { send } from './transport.js';
 import { escapeHtml, renderRichContent } from './render.js';
 import { decryptMessage } from './crypto.js';
 
-let searchOpen = false;
-let searchResults = [];
-
 export function toggleSearch() {
-  searchOpen = !searchOpen;
+  state.searchOpen = !state.searchOpen;
   const bar = document.getElementById('search-bar');
   const results = document.getElementById('search-results');
-  if (searchOpen) {
+  if (state.searchOpen) {
     bar.style.display = 'flex';
     results.style.display = 'block';
     document.getElementById('search-input').focus();
@@ -20,16 +17,16 @@ export function toggleSearch() {
     bar.style.display = 'none';
     results.style.display = 'none';
     results.innerHTML = '';
-    searchResults = [];
+    state.searchResults = [];
   }
 }
 
 export function closeSearch() {
-  searchOpen = false;
+  state.searchOpen = false;
   document.getElementById('search-bar').style.display = 'none';
   document.getElementById('search-results').style.display = 'none';
   document.getElementById('search-results').innerHTML = '';
-  searchResults = [];
+  state.searchResults = [];
 }
 
 export function executeSearch() {
@@ -94,7 +91,7 @@ export function handleSearchResults(msg) {
 }
 
 function renderSearchResults(results, query) {
-  searchResults = results;
+  state.searchResults = results;
   const el = document.getElementById('search-results');
   el.style.display = 'block';
 

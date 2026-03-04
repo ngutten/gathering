@@ -1,6 +1,8 @@
 use super::Hub;
 use crate::protocol::ServerMsg;
 
+const DEFAULT_HISTORY_LIMIT: u32 = 100;
+
 impl Hub {
     pub(super) async fn handle_start_dm(&self, id: usize, target_user: String) {
         let clients = self.clients.lock().await;
@@ -39,34 +41,40 @@ impl Hub {
         }
 
         // Send history to requester
-        let history = self.db.get_history(&dm_channel, 100);
+        let history = self.db.get_history(&dm_channel, DEFAULT_HISTORY_LIMIT);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::History {
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::History {
                 channel: dm_channel.clone(),
                 messages: history,
-            });
+            }) {
+                eprintln!("[hub::dms] send DM history to requester failed: {e:?}");
+            }
         }
 
         // If channel is encrypted, deliver channel key or request it
         if self.db.is_channel_encrypted(&dm_channel) {
             if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&dm_channel, &username) {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
                         channel: dm_channel.clone(),
                         encrypted_key,
                         key_version,
-                    });
+                    }) {
+                        eprintln!("[hub::dms] send DM channel key to requester failed: {e:?}");
+                    }
                 }
             }
         }
 
         // Send DMStarted to requester (initiated=true only for NEW channels so they generate the key)
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::DMStarted {
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::DMStarted {
                 channel: dm_channel.clone(),
                 other_user: target_user.clone(),
                 initiated: !channel_exists,
-            });
+            }) {
+                eprintln!("[hub::dms] send DMStarted to requester failed: {e:?}");
+            }
         }
 
         // If target is online, auto-join them and notify
@@ -81,24 +89,30 @@ impl Hub {
         }
         for tid in &target_ids {
             if let Some(client) = clients.get(tid) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::DMStarted {
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::DMStarted {
                     channel: dm_channel.clone(),
                     other_user: username.clone(),
                     initiated: false,
-                });
+                }) {
+                    eprintln!("[hub::dms] send DMStarted to target failed: {e:?}");
+                }
                 // Send history to target
-                let history = self.db.get_history(&dm_channel, 100);
-                let _ = Self::send_to(&client.tx, &ServerMsg::History {
+                let history = self.db.get_history(&dm_channel, DEFAULT_HISTORY_LIMIT);
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::History {
                     channel: dm_channel.clone(),
                     messages: history,
-                });
+                }) {
+                    eprintln!("[hub::dms] send DM history to target failed: {e:?}");
+                }
                 // Send channel key if available
                 if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&dm_channel, &target_user) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
                         channel: dm_channel.clone(),
                         encrypted_key,
                         key_version,
-                    });
+                    }) {
+                        eprintln!("[hub::dms] send DM channel key to target failed: {e:?}");
+                    }
                 }
             }
         }
@@ -113,7 +127,9 @@ impl Hub {
 
         let dms = self.db.list_user_dms(&username);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::DMList { dms });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::DMList { dms }) {
+                eprintln!("[hub::dms] send DM list failed: {e:?}");
+            }
         }
     }
 }

@@ -28,6 +28,14 @@ use crate::db::Db;
 use crate::hub::Hub;
 use crate::protocol::*;
 
+const DEFAULT_HTTPS_PORT: u16 = 9123;
+const RATE_LIMIT_MAX_REQUESTS: u32 = 10;
+const RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const EXPIRY_PURGE_INTERVAL_SECS: u64 = 60;
+const MIN_USERNAME_LEN: usize = 2;
+const MAX_USERNAME_LEN: usize = 32;
+const MIN_PASSWORD_LEN: usize = 6;
+
 struct AppState {
     hub: Hub,
     db: Arc<Db>,
@@ -105,7 +113,9 @@ async fn main() {
 
     // Auto-assign admin role to config-listed admins
     for admin_name in &config.admins {
-        let _ = db.assign_role(admin_name, "admin");
+        if let Err(e) = db.assign_role(admin_name, "admin") {
+            eprintln!("[main] auto-assign admin role to {admin_name} failed: {e}");
+        }
     }
 
     let hub = Hub::new(db.clone(), data_dir.clone());
@@ -123,7 +133,7 @@ async fn main() {
     let expiry_db = db.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(EXPIRY_PURGE_INTERVAL_SECS)).await;
             let n = expiry_db.purge_expired();
             if n > 0 {
                 tracing::info!("Purged {} expired messages", n);
@@ -152,7 +162,7 @@ async fn main() {
         .route("/api/login", post(handle_login))
         .route("/api/logout", post(handle_logout))
         .route("/api/server-info", get(handle_server_info))
-        .route("/api/upload", post(handle_upload).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        .route("/api/upload", post(handle_upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)))
         .route("/api/files/:id", get(handle_download))
         .route("/ws", get(ws_upgrade))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
@@ -162,7 +172,7 @@ async fn main() {
     let port: u16 = std::env::var("GATHERING_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(9123);
+        .unwrap_or(DEFAULT_HTTPS_PORT);
 
     let http_port: u16 = std::env::var("GATHERING_HTTP_PORT")
         .ok()
@@ -222,19 +232,19 @@ async fn handle_register(
     Json(req): Json<RegisterRequest>,
 ) -> impl IntoResponse {
     // S5: Rate limiting
-    if !state.check_rate_limit(addr.ip(), 10, 60).await {
+    if !state.check_rate_limit(addr.ip(), RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECS).await {
         return (StatusCode::TOO_MANY_REQUESTS, Json(AuthResponse {
             ok: false, token: None,
             error: Some("Too many requests. Try again later.".into()),
         }));
     }
-    if req.username.len() < 2 || req.username.len() > 32 {
+    if req.username.len() < MIN_USERNAME_LEN || req.username.len() > MAX_USERNAME_LEN {
         return (StatusCode::BAD_REQUEST, Json(AuthResponse {
             ok: false, token: None,
             error: Some("Username must be 2-32 characters".into()),
         }));
     }
-    if req.password.len() < 6 {
+    if req.password.len() < MIN_PASSWORD_LEN {
         return (StatusCode::BAD_REQUEST, Json(AuthResponse {
             ok: false, token: None,
             error: Some("Password must be at least 6 characters".into()),
@@ -282,18 +292,24 @@ async fn handle_register(
             tracing::info!("Registered user: {}", req.username);
 
             // Assign default "user" role
-            let _ = state.db.assign_role(&req.username, "user");
+            if let Err(e) = state.db.assign_role(&req.username, "user") {
+                eprintln!("[main] assign default user role failed: {e}");
+            }
 
             // Check if this user is in the config admins list
             if state.config.admins.contains(&req.username) {
-                let _ = state.db.assign_role(&req.username, "admin");
+                if let Err(e) = state.db.assign_role(&req.username, "admin") {
+                    eprintln!("[main] auto-assign admin role on register failed: {e}");
+                }
                 tracing::info!("Auto-assigned admin role to: {}", req.username);
             }
 
             // Mark invite code as used
             if reg_mode == "invite" {
                 if let Some(code) = &req.invite_code {
-                    let _ = state.db.use_invite(code, &req.username);
+                    if let Err(e) = state.db.use_invite(code, &req.username) {
+                        eprintln!("[main] mark invite code as used failed: {e}");
+                    }
                 }
             }
 
@@ -318,7 +334,7 @@ async fn handle_login(
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
     // S5: Rate limiting
-    if !state.check_rate_limit(addr.ip(), 10, 60).await {
+    if !state.check_rate_limit(addr.ip(), RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECS).await {
         return (StatusCode::TOO_MANY_REQUESTS, Json(AuthResponse {
             ok: false, token: None,
             error: Some("Too many requests. Try again later.".into()),
@@ -464,7 +480,9 @@ async fn handle_upload(
                     .unwrap_or("bin");
                 let disk_name = format!("{}.{}", fid, ext);
                 let fpath = state.data_dir.join("uploads").join(&disk_name);
-                let _ = tokio::fs::remove_file(&fpath).await;
+                if let Err(e) = tokio::fs::remove_file(&fpath).await {
+                    eprintln!("[main] remove file during quota cleanup failed: {e}");
+                }
                 state.db.delete_file_record(&fid);
                 used_bytes -= fsize;
             }

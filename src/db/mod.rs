@@ -25,7 +25,9 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
         .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
         .unwrap_or_default();
     if !sql.is_empty() && !sql.contains(column) {
-        let _ = conn.execute_batch(&format!("ALTER TABLE {} ADD COLUMN {} {};", table, column, definition));
+        if let Err(e) = conn.execute_batch(&format!("ALTER TABLE {} ADD COLUMN {} {};", table, column, definition)) {
+            eprintln!("[db] ensure_column ALTER TABLE {table} ADD {column} failed: {e}");
+        }
     }
 }
 

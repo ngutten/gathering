@@ -1,6 +1,8 @@
 use super::Hub;
 use crate::protocol::ServerMsg;
 
+const MAX_SEARCH_RESULTS: u32 = 50;
+
 impl Hub {
     pub(super) async fn handle_search_messages(&self, id: usize, query: String, channel: Option<String>) {
         let clients = self.clients.lock().await;
@@ -8,9 +10,11 @@ impl Hub {
             Some(c) if !c.username.is_empty() => c.username.clone(),
             _ => return,
         };
-        let results = self.db.search_messages(&query, channel.as_deref(), 50);
+        let results = self.db.search_messages(&query, channel.as_deref(), MAX_SEARCH_RESULTS);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::SearchResults { query, results });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::SearchResults { query, results }) {
+                eprintln!("[hub::files] send search results failed: {e:?}");
+            }
         }
     }
 
@@ -24,7 +28,9 @@ impl Hub {
         let used_bytes = self.db.get_user_disk_usage(&username);
         let quota_bytes = self.db.get_user_quota(&username);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::MyFileList { files, used_bytes, quota_bytes });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::MyFileList { files, used_bytes, quota_bytes }) {
+                eprintln!("[hub::files] send file list failed: {e:?}");
+            }
         }
     }
 
@@ -39,19 +45,25 @@ impl Hub {
             Some(owner) if owner == username => {}
             _ => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("File not found or not owned by you"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("File not found or not owned by you")) {
+                        eprintln!("[hub::files] send file ownership error failed: {e:?}");
+                    }
                 }
                 return;
             }
         }
         if let Err(e) = self.db.set_file_pinned(&file_id, pinned) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                    eprintln!("[hub::files] send set_file_pinned error failed: {e:?}");
+                }
             }
             return;
         }
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::FilePinned { file_id, pinned });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::FilePinned { file_id, pinned }) {
+                eprintln!("[hub::files] send file pinned confirmation failed: {e:?}");
+            }
         }
     }
 
@@ -66,7 +78,9 @@ impl Hub {
             Some(owner) if owner == username => {}
             _ => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error("File not found or not owned by you"));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("File not found or not owned by you")) {
+                        eprintln!("[hub::files] send file ownership error failed: {e:?}");
+                    }
                 }
                 return;
             }
@@ -79,10 +93,14 @@ impl Hub {
                 .unwrap_or("bin");
             let disk_name = format!("{}.{}", file_id, ext);
             let file_path = self.data_dir.join("uploads").join(&disk_name);
-            let _ = std::fs::remove_file(&file_path);
+            if let Err(e) = std::fs::remove_file(&file_path) {
+                eprintln!("[hub::files] remove file from disk failed: {e}");
+            }
 
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::FileDeleted { file_id });
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::FileDeleted { file_id }) {
+                    eprintln!("[hub::files] send file deleted confirmation failed: {e:?}");
+                }
             }
         }
     }

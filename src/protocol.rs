@@ -442,10 +442,6 @@ impl ServerMsg {
         ServerMsg::Error { message: msg.into() }
     }
 
-    pub fn system(msg: impl Into<String>) -> Self {
-        ServerMsg::System { content: msg.into() }
-    }
-
     pub fn message(
         channel: &str, author: &str, content: &str,
         expires_at: Option<DateTime<Utc>>,

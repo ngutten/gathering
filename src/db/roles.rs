@@ -7,21 +7,13 @@ impl Db {
     pub fn upsert_role(&self, name: &str, permissions: &[String]) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let perms_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".to_string());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO roles(name, permissions) VALUES(?1, ?2)
              ON CONFLICT(name) DO UPDATE SET permissions = ?2",
             params![name, perms_json],
-        );
-    }
-
-    pub fn upsert_role_with_quota(&self, name: &str, permissions: &[String], disk_quota_mb: i64) {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let perms_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".to_string());
-        let _ = conn.execute(
-            "INSERT INTO roles(name, permissions, disk_quota_mb) VALUES(?1, ?2, ?3)
-             ON CONFLICT(name) DO UPDATE SET permissions = ?2, disk_quota_mb = ?3",
-            params![name, perms_json, disk_quota_mb],
-        );
+        ) {
+            eprintln!("[db::roles] upsert_role failed: {e}");
+        }
     }
 
     pub fn delete_role(&self, name: &str) -> Result<(), String> {
@@ -55,12 +47,14 @@ impl Db {
 
     pub fn backfill_user_roles(&self) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO user_roles(username, role_name)
              SELECT u.username, 'user' FROM users u
              WHERE NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.username = u.username)",
             [],
-        );
+        ) {
+            eprintln!("[db::roles] backfill_user_roles failed: {e}");
+        }
     }
 
     pub fn assign_role(&self, username: &str, role: &str) -> Result<(), String> {
@@ -119,13 +113,4 @@ impl Db {
         perms.contains(&"*".to_string()) || perms.contains(&perm.to_string())
     }
 
-    pub fn update_role_quota(&self, name: &str, disk_quota_mb: i64) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let rows = conn.execute(
-            "UPDATE roles SET disk_quota_mb = ?2 WHERE name = ?1",
-            params![name, disk_quota_mb],
-        ).map_err(|e| e.to_string())?;
-        if rows == 0 { return Err("Role not found".into()); }
-        Ok(())
-    }
 }

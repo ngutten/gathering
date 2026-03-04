@@ -17,6 +17,8 @@ use crate::db::Db;
 use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg};
 use std::path::PathBuf;
 
+const DEFAULT_HISTORY_LIMIT: u32 = 100;
+
 /// A connected user's handle
 pub(super) struct Client {
     pub(super) username: String,
@@ -125,21 +127,27 @@ impl Hub {
         // Send channel list (filtered for this user)
         let channels = self.channel_list_for_user(&clients, Some(&username));
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels }) {
+                eprintln!("[hub] send channel list on auth failed: {e:?}");
+            }
         }
 
         // Send DM list
         if !user_dms.is_empty() {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::DMList { dms: user_dms.clone() });
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::DMList { dms: user_dms.clone() }) {
+                    eprintln!("[hub] send DM list on auth failed: {e:?}");
+                }
                 // Send channel keys for DM channels
                 for dm in &user_dms {
                     if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&dm.channel, &username) {
-                        let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                        if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
                             channel: dm.channel.clone(),
                             encrypted_key,
                             key_version,
-                        });
+                        }) {
+                            eprintln!("[hub] send DM channel key on auth failed: {e:?}");
+                        }
                     }
                 }
             }
@@ -151,15 +159,17 @@ impl Hub {
         Self::broadcast_all_inner(&clients, &msg, None);
 
         // Send history for general
-        let history = self.db.get_history("general", 100);
+        let history = self.db.get_history("general", DEFAULT_HISTORY_LIMIT);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(
+            if let Err(e) = Self::send_to(
                 &client.tx,
                 &ServerMsg::History {
                     channel: "general".to_string(),
                     messages: history,
                 },
-            );
+            ) {
+                eprintln!("[hub] send general history on auth failed: {e:?}");
+            }
         }
 
         Ok(username)
@@ -189,7 +199,9 @@ impl Hub {
                             roles: None,
                         },
                     };
-                    let _ = Self::send_to(&client.tx, &resp);
+                    if let Err(e) = Self::send_to(&client.tx, &resp) {
+                        eprintln!("[hub] send auth result failed: {e:?}");
+                    }
                 }
             }
 
@@ -411,7 +423,9 @@ impl Hub {
         for (cid, client) in clients {
             if exclude == Some(*cid) { continue; }
             if client.channels.contains(channel) {
-                let _ = client.tx.send(Message::Text(json.clone()));
+                if let Err(e) = client.tx.send(Message::Text(json.clone())) {
+                    eprintln!("[hub] broadcast to channel failed for client {cid}: {e}");
+                }
             }
         }
     }
@@ -429,7 +443,9 @@ impl Hub {
         for (cid, client) in clients {
             if exclude == Some(*cid) { continue; }
             if client.voice_channel.as_deref() == Some(channel) {
-                let _ = client.tx.send(Message::Text(json.clone()));
+                if let Err(e) = client.tx.send(Message::Text(json.clone())) {
+                    eprintln!("[hub] broadcast to voice channel failed for client {cid}: {e}");
+                }
             }
         }
     }
@@ -439,7 +455,9 @@ impl Hub {
         for (_, client) in clients {
             if client.username.is_empty() { continue; }
             let channels = self.channel_list_for_user(clients, Some(&client.username));
-            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels }) {
+                eprintln!("[hub] broadcast channel list to user {} failed: {e:?}", client.username);
+            }
         }
     }
 
@@ -455,7 +473,9 @@ impl Hub {
         for (cid, client) in clients {
             if exclude == Some(*cid) { continue; }
             if !client.username.is_empty() {
-                let _ = client.tx.send(Message::Text(json.clone()));
+                if let Err(e) = client.tx.send(Message::Text(json.clone())) {
+                    eprintln!("[hub] broadcast to all failed for client {cid}: {e}");
+                }
             }
         }
     }
@@ -522,46 +542,13 @@ impl Hub {
         Self::broadcast_all_inner(clients, &msg, None);
     }
 
-    // ── Auth/convenience helpers ─────────────────────────────────────
-
-    /// Get the username for a connected client (None if not authenticated)
-    async fn get_username(&self, id: usize) -> Option<String> {
-        let clients = self.clients.lock().await;
-        match clients.get(&id) {
-            Some(c) if !c.username.is_empty() => Some(c.username.clone()),
-            _ => None,
-        }
-    }
-
-    /// Get username and verify client has joined the given channel
-    async fn require_in_channel(&self, id: usize, channel: &str) -> Option<String> {
-        let clients = self.clients.lock().await;
-        match clients.get(&id) {
-            Some(c) if !c.username.is_empty() && c.channels.contains(channel) => Some(c.username.clone()),
-            _ => None,
-        }
-    }
-
-    /// Get username and verify client has the given permission
-    async fn require_permission(&self, id: usize, permission: &str) -> Option<String> {
-        let clients = self.clients.lock().await;
-        match clients.get(&id) {
-            Some(c) if !c.username.is_empty() => {
-                if self.db.user_has_permission(&c.username, permission) {
-                    Some(c.username.clone())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Send an error message to a client
     pub(super) async fn send_error(&self, id: usize, msg: &str) {
         let clients = self.clients.lock().await;
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::error(msg));
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(msg)) {
+                eprintln!("[hub] send error to client {id} failed: {e:?}");
+            }
         }
     }
 
@@ -569,7 +556,9 @@ impl Hub {
     pub(super) async fn send_msg(&self, id: usize, msg: &ServerMsg) {
         let clients = self.clients.lock().await;
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, msg);
+            if let Err(e) = Self::send_to(&client.tx, msg) {
+                eprintln!("[hub] send message to client {id} failed: {e:?}");
+            }
         }
     }
 }

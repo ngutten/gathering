@@ -11,7 +11,9 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "delete_channel") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied: delete_channel"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied: delete_channel")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -31,7 +33,9 @@ impl Hub {
             }
             Err(e) => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                        eprintln!("[hub::admin] send delete_channel error failed: {e:?}");
+                    }
                 }
             }
         }
@@ -46,14 +50,18 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_settings") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         let settings = self.db.get_settings();
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::Settings { settings });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::Settings { settings }) {
+                eprintln!("[hub::admin] send settings failed: {e:?}");
+            }
         }
     }
 
@@ -66,7 +74,9 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_settings") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -79,21 +89,27 @@ impl Hub {
         };
         if !valid {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Invalid setting key or value"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Invalid setting key or value")) {
+                    eprintln!("[hub::admin] send invalid setting error failed: {e:?}");
+                }
             }
             return;
         }
 
         if let Err(e) = self.db.set_setting(&key, &value) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                    eprintln!("[hub::admin] send set_setting error failed: {e:?}");
+                }
             }
             return;
         }
 
         let settings = self.db.get_settings();
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::Settings { settings });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::Settings { settings }) {
+                eprintln!("[hub::admin] send updated settings failed: {e:?}");
+            }
         }
     }
 
@@ -106,14 +122,18 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_invites") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         let code = self.db.create_invite(&username);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::InviteCreated { code });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::InviteCreated { code }) {
+                eprintln!("[hub::admin] send invite created failed: {e:?}");
+            }
         }
     }
 
@@ -126,14 +146,18 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_invites") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         let invites = self.db.list_invites();
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::InviteList { invites });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::InviteList { invites }) {
+                eprintln!("[hub::admin] send invite list failed: {e:?}");
+            }
         }
     }
 
@@ -146,14 +170,18 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         let roles = self.db.list_roles();
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::RoleList { roles });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::RoleList { roles }) {
+                eprintln!("[hub::admin] send role list failed: {e:?}");
+            }
         }
     }
 
@@ -166,7 +194,9 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -174,7 +204,9 @@ impl Hub {
         self.db.upsert_role(&name, &permissions);
         let roles = self.db.list_roles();
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::RoleList { roles });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::RoleList { roles }) {
+                eprintln!("[hub::admin] send role list after create failed: {e:?}");
+            }
         }
     }
 
@@ -187,7 +219,9 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -195,7 +229,9 @@ impl Hub {
         self.db.upsert_role(&name, &permissions);
         let roles = self.db.list_roles();
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::RoleList { roles });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::RoleList { roles }) {
+                eprintln!("[hub::admin] send role list after update failed: {e:?}");
+            }
         }
     }
 
@@ -208,7 +244,9 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
@@ -217,12 +255,16 @@ impl Hub {
             Ok(()) => {
                 let roles = self.db.list_roles();
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::RoleList { roles });
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::RoleList { roles }) {
+                        eprintln!("[hub::admin] send role list after delete failed: {e:?}");
+                    }
                 }
             }
             Err(e) => {
                 if let Some(client) = clients.get(&id) {
-                    let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                        eprintln!("[hub::admin] send delete_role error failed: {e:?}");
+                    }
                 }
             }
         }
@@ -237,21 +279,27 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         if let Err(e) = self.db.assign_role(&target_user, &role_name) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                    eprintln!("[hub::admin] send assign_role error failed: {e:?}");
+                }
             }
             return;
         }
 
         let roles = self.db.get_user_roles(&target_user);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles }) {
+                eprintln!("[hub::admin] send user roles failed: {e:?}");
+            }
         }
     }
 
@@ -264,21 +312,27 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         if let Err(e) = self.db.remove_role(&target_user, &role_name) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error(e)) {
+                    eprintln!("[hub::admin] send remove_role error failed: {e:?}");
+                }
             }
             return;
         }
 
         let roles = self.db.get_user_roles(&target_user);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles }) {
+                eprintln!("[hub::admin] send user roles failed: {e:?}");
+            }
         }
     }
 
@@ -291,14 +345,18 @@ impl Hub {
 
         if !self.db.user_has_permission(&username, "manage_roles") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
+                    eprintln!("[hub::admin] send permission denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         let roles = self.db.get_user_roles(&target_user);
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles });
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles }) {
+                eprintln!("[hub::admin] send user roles failed: {e:?}");
+            }
         }
     }
 }

@@ -13,14 +13,18 @@ impl Hub {
         let creation_mode = self.db.get_setting("channel_creation").unwrap_or_else(|| "all".to_string());
         if creation_mode == "admin" && !self.db.user_has_permission(&username, "create_channel") {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels")) {
+                    eprintln!("[hub::voice] send channel creation denied error failed: {e:?}");
+                }
             }
             return;
         }
 
         if self.db.channel_exists(&channel) {
             if let Some(client) = clients.get(&id) {
-                let _ = Self::send_to(&client.tx, &ServerMsg::error("Channel already exists"));
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Channel already exists")) {
+                    eprintln!("[hub::voice] send channel exists error failed: {e:?}");
+                }
             }
             return;
         }
@@ -72,10 +76,12 @@ impl Hub {
 
         // Send VoiceMembers to the joiner
         if let Some(client) = clients.get(&id) {
-            let _ = Self::send_to(&client.tx, &ServerMsg::VoiceMembers {
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::VoiceMembers {
                 channel: channel.clone(),
                 users: members,
-            });
+            }) {
+                eprintln!("[hub::voice] send voice members failed: {e:?}");
+            }
 
             // Send video states of other users who have video/screen on
             let video_states: Vec<_> = clients.values()
@@ -88,7 +94,9 @@ impl Hub {
                 })
                 .collect();
             for vs in video_states {
-                let _ = Self::send_to(&client.tx, &vs);
+                if let Err(e) = Self::send_to(&client.tx, &vs) {
+                    eprintln!("[hub::voice] send video state failed: {e:?}");
+                }
             }
         }
 
@@ -139,10 +147,12 @@ impl Hub {
         // Find target user and relay
         for client in clients.values() {
             if client.username == target_user {
-                let _ = Self::send_to(&client.tx, &ServerMsg::VoiceSignal {
+                if let Err(e) = Self::send_to(&client.tx, &ServerMsg::VoiceSignal {
                     from_user: from_user.clone(),
                     signal_data: signal_data.clone(),
-                });
+                }) {
+                    eprintln!("[hub::voice] relay voice signal to target failed: {e:?}");
+                }
             }
         }
     }

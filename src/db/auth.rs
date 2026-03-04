@@ -77,6 +77,8 @@ impl Db {
 
     pub fn delete_session(&self, token: &str) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", params![token]);
+        if let Err(e) = conn.execute("DELETE FROM sessions WHERE token = ?1", params![token]) {
+            eprintln!("[db::auth] delete_session failed: {e}");
+        }
     }
 }

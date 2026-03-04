@@ -15,11 +15,13 @@ impl Db {
         encrypted: bool,
     ) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO files (id, filename, size, mime_type, uploader, channel, encrypted)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![id, filename, size, mime_type, uploader, channel, encrypted as i32],
-        );
+        ) {
+            eprintln!("[db::files] store_file insert failed: {e}");
+        }
     }
 
     pub fn get_file(&self, id: &str) -> Option<FileInfo> {
@@ -83,7 +85,9 @@ impl Db {
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         ).ok();
         if info.is_some() {
-            let _ = conn.execute("DELETE FROM files WHERE id = ?1", params![file_id]);
+            if let Err(e) = conn.execute("DELETE FROM files WHERE id = ?1", params![file_id]) {
+                eprintln!("[db::files] delete_file_record delete failed: {e}");
+            }
         }
         info
     }

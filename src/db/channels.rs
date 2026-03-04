@@ -5,18 +5,22 @@ use super::Db;
 impl Db {
     pub fn ensure_channel(&self, name: &str) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO channels(name) VALUES (?1)",
             params![name],
-        );
+        ) {
+            eprintln!("[db::channels] ensure_channel insert failed: {e}");
+        }
     }
 
     pub fn ensure_channel_with_creator(&self, name: &str, creator: &str) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO channels(name, created_by) VALUES (?1, ?2)",
             params![name, creator],
-        );
+        ) {
+            eprintln!("[db::channels] ensure_channel_with_creator insert failed: {e}");
+        }
     }
 
     pub fn channel_exists(&self, name: &str) -> bool {
@@ -26,17 +30,6 @@ impl Db {
             params![name],
             |row| row.get::<_, bool>(0),
         ).unwrap_or(false)
-    }
-
-    pub fn list_channels(&self) -> Vec<String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare("SELECT name FROM channels ORDER BY name")
-            .unwrap();
-        stmt.query_map([], |row| row.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
     }
 
     pub fn delete_channel(&self, name: &str) -> Result<(), String> {
@@ -54,10 +47,18 @@ impl Db {
             .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM files WHERE channel = ?1", params![name])
             .map_err(|e| e.to_string())?;
-        let _ = conn.execute("DELETE FROM channel_keys WHERE channel = ?1", params![name]);
-        let _ = conn.execute("DELETE FROM channel_encryption WHERE channel = ?1", params![name]);
-        let _ = conn.execute("DELETE FROM channel_members WHERE channel = ?1", params![name]);
-        let _ = conn.execute("DELETE FROM dm_members WHERE channel = ?1", params![name]);
+        if let Err(e) = conn.execute("DELETE FROM channel_keys WHERE channel = ?1", params![name]) {
+            eprintln!("[db::channels] delete channel_keys on channel delete failed: {e}");
+        }
+        if let Err(e) = conn.execute("DELETE FROM channel_encryption WHERE channel = ?1", params![name]) {
+            eprintln!("[db::channels] delete channel_encryption on channel delete failed: {e}");
+        }
+        if let Err(e) = conn.execute("DELETE FROM channel_members WHERE channel = ?1", params![name]) {
+            eprintln!("[db::channels] delete channel_members on channel delete failed: {e}");
+        }
+        if let Err(e) = conn.execute("DELETE FROM dm_members WHERE channel = ?1", params![name]) {
+            eprintln!("[db::channels] delete dm_members on channel delete failed: {e}");
+        }
         let rows = conn.execute("DELETE FROM channels WHERE name = ?1", params![name])
             .map_err(|e| e.to_string())?;
         if rows == 0 {
@@ -68,25 +69,20 @@ impl Db {
 
     pub fn create_channel_with_type(&self, name: &str, channel_type: &str) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT OR IGNORE INTO channels(name, channel_type) VALUES (?1, ?2)",
             params![name, channel_type],
-        );
+        ) {
+            eprintln!("[db::channels] create_channel_with_type insert failed: {e}");
+        }
         if channel_type == "voice" {
-            let _ = conn.execute(
+            if let Err(e) = conn.execute(
                 "INSERT OR IGNORE INTO voice_channel_ttl(channel) VALUES (?1)",
                 params![name],
-            );
+            ) {
+                eprintln!("[db::channels] create voice_channel_ttl entry failed: {e}");
+            }
         }
-    }
-
-    pub fn get_channel_type(&self, name: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.query_row(
-            "SELECT channel_type FROM channels WHERE name = ?1",
-            params![name],
-            |row| row.get::<_, String>(0),
-        ).ok()
     }
 
     pub fn list_channels_with_type(&self) -> Vec<(String, String)> {
@@ -102,10 +98,12 @@ impl Db {
 
     pub fn set_channel_restricted(&self, channel: &str, restricted: bool) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "UPDATE channels SET restricted = ?2 WHERE name = ?1",
             params![channel, restricted as i32],
-        );
+        ) {
+            eprintln!("[db::channels] set_channel_restricted update failed: {e}");
+        }
     }
 
     pub fn is_channel_restricted(&self, channel: &str) -> bool {
@@ -124,14 +122,6 @@ impl Db {
             params![channel],
             |row| row.get::<_, Option<String>>(0),
         ).ok().flatten()
-    }
-
-    pub fn set_channel_creator(&self, channel: &str, username: &str) {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = conn.execute(
-            "UPDATE channels SET created_by = ?2 WHERE name = ?1",
-            params![channel, username],
-        );
     }
 
     pub fn can_access_channel(&self, channel: &str, username: &str) -> bool {

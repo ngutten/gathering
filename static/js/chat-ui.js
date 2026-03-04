@@ -2,9 +2,12 @@
 
 import state, { isDMChannel } from './state.js';
 import { send } from './transport.js';
-import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime, renderAttachmentsHtml, decryptAndRenderAttachments } from './render.js';
-import { decryptMessage } from './crypto.js';
+import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime, renderAttachmentsHtml, decryptAndRenderAttachments, renderTtlBadge, renderEncryptedBadge } from './render.js';
+import { tryDecrypt } from './crypto.js';
 import { apiUrl, fileUrl } from './config.js';
+
+const TYPING_INDICATOR_TIMEOUT_MS = 3000;
+const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
 
 
 export function appendMessage(msg) {
@@ -17,15 +20,7 @@ export function appendMessage(msg) {
   div.setAttribute('data-author', msg.author);
 
   const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  let ttlHtml = '';
-  if (msg.expires_at) {
-    const exp = new Date(msg.expires_at);
-    const remaining = Math.max(0, Math.round((exp - Date.now()) / 1000));
-    if (remaining < 60) ttlHtml = `<span class="ttl">[${remaining}s]</span>`;
-    else if (remaining < 3600) ttlHtml = `<span class="ttl">[${Math.round(remaining/60)}m]</span>`;
-    else if (remaining < 86400) ttlHtml = `<span class="ttl">[${Math.round(remaining/3600)}h]</span>`;
-    else ttlHtml = `<span class="ttl">[${Math.round(remaining/86400)}d]</span>`;
-  }
+  const ttlHtml = renderTtlBadge(msg.expires_at);
 
   let editedHtml = '';
   if (msg.edited_at) {
@@ -35,18 +30,8 @@ export function appendMessage(msg) {
   let displayContent = msg.content;
   let encBadge = '';
   if (msg.encrypted) {
-    const ch = msg.channel || state.currentChannel;
-    if (state.channelKeys[ch]) {
-      const decrypted = decryptMessage(msg.content, state.channelKeys[ch]);
-      if (decrypted !== null) {
-        displayContent = decrypted;
-      } else {
-        displayContent = '[Encrypted - decryption failed]';
-      }
-    } else {
-      displayContent = '[Encrypted - key unavailable]';
-    }
-    encBadge = '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+    displayContent = tryDecrypt(msg.content, msg.channel || state.currentChannel);
+    encBadge = renderEncryptedBadge(true);
   }
   div.setAttribute('data-content', msg.encrypted ? displayContent : msg.content);
   div.setAttribute('data-encrypted', msg.encrypted ? '1' : '0');
@@ -197,7 +182,7 @@ export function showTyping(username) {
   clearTimeout(state.typingTimers[username]);
   state.typingTimers[username] = setTimeout(() => {
     el.textContent = '';
-  }, 3000);
+  }, TYPING_INDICATOR_TIMEOUT_MS);
 }
 
 // ── Video Tile Functions ──
@@ -358,7 +343,7 @@ export function closeChannelSettings() {
 export function toggleChannelRestricted(channel, restricted) {
   send('SetChannelRestricted', { channel, restricted });
   // Refresh the member list after a short delay
-  setTimeout(() => send('GetChannelMembers', { channel }), 300);
+  setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
 }
 
 export function addChannelMember(channel) {
@@ -368,12 +353,12 @@ export function addChannelMember(channel) {
   if (!username) return;
   send('AddChannelMember', { channel, username });
   input.value = '';
-  setTimeout(() => send('GetChannelMembers', { channel }), 300);
+  setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
 }
 
 export function removeChannelMember(channel, username) {
   send('RemoveChannelMember', { channel, username });
-  setTimeout(() => send('GetChannelMembers', { channel }), 300);
+  setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
 }
 
 export function switchChannel(name) {
