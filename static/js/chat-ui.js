@@ -212,6 +212,107 @@ export function showTyping(username) {
   }, 3000);
 }
 
+// ── Video Tile Functions ──
+
+export function addVideoTile(username, type, stream) {
+  const grid = document.getElementById('video-grid');
+  if (!grid) return;
+  const tileId = `video-tile-${username}-${type}`;
+  // Remove existing tile if any
+  const existing = document.getElementById(tileId);
+  if (existing) existing.remove();
+
+  const div = document.createElement('div');
+  div.id = tileId;
+  div.className = type === 'screen' ? 'screen-share-tile' : 'video-tile';
+
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.playsInline = true;
+  // Mute local self-view to prevent feedback
+  if (username === state.currentUser) {
+    video.muted = true;
+    if (type === 'camera') video.classList.add('local-camera');
+  }
+  video.srcObject = stream;
+
+  const label = document.createElement('div');
+  label.className = 'video-label';
+  label.textContent = type === 'screen' ? `${username} (screen)` : username;
+
+  const pinBtn = document.createElement('button');
+  pinBtn.className = 'video-pin-btn';
+  pinBtn.title = 'Pin tile';
+  pinBtn.textContent = '\u{1F4CC}';
+  pinBtn.onclick = (e) => {
+    e.stopPropagation();
+    togglePinTile(tileId);
+  };
+
+  div.appendChild(video);
+  div.appendChild(label);
+  div.appendChild(pinBtn);
+
+  // Screen tiles prepended (shown first), unless there's a pinned tile
+  if (type === 'screen') {
+    grid.prepend(div);
+  } else {
+    grid.appendChild(div);
+  }
+
+  // Auto-pin screen share tiles when they're the first tile
+  if (type === 'screen' && !grid.querySelector('.pinned')) {
+    togglePinTile(tileId);
+  }
+}
+
+function togglePinTile(tileId) {
+  const grid = document.getElementById('video-grid');
+  if (!grid) return;
+  const tile = document.getElementById(tileId);
+  if (!tile) return;
+
+  const wasPinned = tile.classList.contains('pinned');
+
+  // Remove pinned from all tiles
+  grid.querySelectorAll('.pinned').forEach(el => el.classList.remove('pinned'));
+
+  // Toggle the grid layout
+  if (wasPinned) {
+    grid.classList.remove('has-pinned');
+  } else {
+    tile.classList.add('pinned');
+    grid.classList.add('has-pinned');
+    // Move pinned tile to be the first child
+    grid.prepend(tile);
+  }
+}
+
+export function removeVideoTile(username, type) {
+  const el = document.getElementById(`video-tile-${username}-${type}`);
+  if (el) {
+    const wasPinned = el.classList.contains('pinned');
+    el.remove();
+    if (wasPinned) {
+      const grid = document.getElementById('video-grid');
+      if (grid) grid.classList.remove('has-pinned');
+    }
+  }
+}
+
+export function removeAllTilesForUser(username) {
+  removeVideoTile(username, 'camera');
+  removeVideoTile(username, 'screen');
+}
+
+export function removeAllVideoTiles() {
+  const grid = document.getElementById('video-grid');
+  if (grid) {
+    grid.innerHTML = '';
+    grid.classList.remove('has-pinned');
+  }
+}
+
 export function switchChannel(name) {
   state.currentChannel = name;
   state.currentTopicId = null;

@@ -15,6 +15,10 @@ struct Client {
     channels: HashSet<String>,
     /// Voice channel this client is in (at most one)
     voice_channel: Option<String>,
+    /// Whether camera video is on
+    video_on: bool,
+    /// Whether screen sharing is on
+    screen_share_on: bool,
     /// Sender to push messages to their WebSocket
     tx: mpsc::UnboundedSender<Message>,
 }
@@ -47,6 +51,8 @@ impl Hub {
             username: String::new(), // set after auth
             channels: HashSet::new(),
             voice_channel: None,
+            video_on: false,
+            screen_share_on: false,
             tx,
         };
         self.clients.lock().await.insert(id, client);
@@ -415,6 +421,20 @@ impl Hub {
                         channel: channel.clone(),
                         users: members,
                     });
+
+                    // Send video states of other users who have video/screen on
+                    let video_states: Vec<_> = clients.values()
+                        .filter(|c| c.voice_channel.as_deref() == Some(&channel) && c.username != client.username && (c.video_on || c.screen_share_on))
+                        .map(|c| ServerMsg::UserVideoState {
+                            channel: channel.clone(),
+                            username: c.username.clone(),
+                            video_on: c.video_on,
+                            screen_share_on: c.screen_share_on,
+                        })
+                        .collect();
+                    for vs in video_states {
+                        let _ = Self::send_to(&client.tx, &vs);
+                    }
                 }
 
                 // Broadcast VoiceUserJoined to others in the voice channel
@@ -433,6 +453,8 @@ impl Hub {
                 let username = match clients.get_mut(&id) {
                     Some(c) if !c.username.is_empty() && c.voice_channel.as_deref() == Some(&channel) => {
                         c.voice_channel = None;
+                        c.video_on = false;
+                        c.screen_share_on = false;
                         c.username.clone()
                     }
                     _ => return,
@@ -468,6 +490,25 @@ impl Hub {
                         });
                     }
                 }
+            }
+
+            ClientMsg::VideoStateChange { channel, video_on, screen_share_on } => {
+                let mut clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() && c.voice_channel.as_deref() == Some(&channel) => c.username.clone(),
+                    _ => return,
+                };
+                if let Some(client) = clients.get_mut(&id) {
+                    client.video_on = video_on;
+                    client.screen_share_on = screen_share_on;
+                }
+                let msg = ServerMsg::UserVideoState {
+                    channel: channel.clone(),
+                    username,
+                    video_on,
+                    screen_share_on,
+                };
+                Self::broadcast_to_voice_channel_inner(&clients, &channel, &msg, None);
             }
 
             ClientMsg::CreateTopic { channel, title, body, ttl_secs, attachments, encrypted } => {

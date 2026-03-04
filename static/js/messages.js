@@ -6,6 +6,7 @@ import { initE2E, updateKeyUI, decryptMessage, decryptChannelKey, encryptChannel
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
+import { removeAllTilesForUser } from './chat-ui.js';
 import { switchView, renderTopicList, renderThread, appendTopicReply } from './topics.js';
 import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCreated, onUserRolesResponse } from './admin.js';
 import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
@@ -108,6 +109,12 @@ export function handleServerMsg(msg) {
     case 'VoiceUserJoined':
       if (!state.voiceMembers.includes(msg.username)) state.voiceMembers.push(msg.username);
       renderVoiceMembers();
+      // If we have video/screen tracks, proactively create a PC as initiator
+      // so our offer includes video m= lines from the start.  The new user
+      // will also initiate from VoiceMembers — glare is handled by polite/impolite.
+      if (state.inVoiceChannel && (state.cameraOn || state.screenShareOn) && !state.peerConnections[msg.username]) {
+        createPeerConnection(msg.username, true);
+      }
       break;
 
     case 'VoiceUserLeft':
@@ -123,6 +130,9 @@ export function handleServerMsg(msg) {
       }
       const audioEl = document.getElementById('audio-' + msg.username);
       if (audioEl) audioEl.remove();
+      removeAllTilesForUser(msg.username);
+      delete state.trackMetadata[msg.username];
+      delete state.peerVideoStates[msg.username];
       break;
 
     case 'VoiceChannelOccupancy':
@@ -132,6 +142,11 @@ export function handleServerMsg(msg) {
 
     case 'VoiceSignal':
       handleVoiceSignal(msg.from_user, msg.signal_data);
+      break;
+
+    case 'UserVideoState':
+      state.peerVideoStates[msg.username] = { video_on: msg.video_on, screen_share_on: msg.screen_share_on };
+      renderVoiceMembers();
       break;
 
     case 'TopicList':

@@ -37,6 +37,8 @@ pub enum ClientMsg {
     VoiceLeave { channel: String },
     /// Relay WebRTC signaling data to a specific user
     VoiceSignal { target_user: String, signal_data: serde_json::Value },
+    /// Notify server of video/screen share state change
+    VideoStateChange { channel: String, video_on: bool, screen_share_on: bool },
     /// Create a new topic in a channel
     CreateTopic {
         channel: String,
@@ -160,6 +162,8 @@ pub enum ServerMsg {
     VoiceMembers { channel: String, users: Vec<String> },
     /// Voice channel occupancy update (broadcast to all)
     VoiceChannelOccupancy { channel: String, users: Vec<String> },
+    /// A user's video/screen share state changed
+    UserVideoState { channel: String, username: String, video_on: bool, screen_share_on: bool },
     /// List of topics for a channel
     TopicList { channel: String, topics: Vec<TopicSummary> },
     /// Full topic with replies

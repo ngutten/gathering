@@ -38,6 +38,14 @@ const state = {
   localAnalyserInterval: null,
   remoteAnalysers: {},
 
+  // Video state
+  cameraOn: false,
+  screenShareOn: false,
+  localCameraStream: null,
+  localScreenStream: null,
+  trackMetadata: {},    // { peerUsername: { streamId_trackId: 'camera'|'screen' } }
+  peerVideoStates: {},  // { username: { video_on, screen_share_on } }
+
   // Topics state
   currentView: 'chat',
   currentTopicId: null,
