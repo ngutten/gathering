@@ -274,13 +274,52 @@ impl Db {
             );"
         )?;
 
+        // Channel members table for restricted channels
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS channel_members (
+                channel TEXT NOT NULL,
+                username TEXT NOT NULL,
+                PRIMARY KEY (channel, username)
+            );"
+        )?;
+
+        // Add restricted and created_by columns to channels if missing
+        let channels_sql2: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='channels'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !channels_sql2.is_empty() && !channels_sql2.contains("restricted") {
+            let _ = conn.execute_batch("ALTER TABLE channels ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;");
+        }
+        if !channels_sql2.is_empty() && !channels_sql2.contains("created_by") {
+            let _ = conn.execute_batch("ALTER TABLE channels ADD COLUMN created_by TEXT;");
+        }
+
+        // Add expires_at to sessions if missing
+        let sessions_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !sessions_sql.is_empty() && !sessions_sql.contains("expires_at") {
+            let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN expires_at TEXT;");
+        }
+
+        // Add encrypted column to files if missing
+        let files_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='files'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !files_sql.is_empty() && !files_sql.contains("encrypted") {
+            let _ = conn.execute_batch("ALTER TABLE files ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;");
+        }
+
         Ok(Db { conn: Mutex::new(conn) })
     }
 
     // ── User management ─────────────────────────────────────────────
 
     pub fn register(&self, username: &str, password: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Check if user exists
         let exists: bool = conn
@@ -311,7 +350,7 @@ impl Db {
     }
 
     pub fn login(&self, username: &str, password: &str) -> Result<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let hash: String = conn
             .query_row(
@@ -327,9 +366,10 @@ impl Db {
             .map_err(|_| "Invalid password".to_string())?;
 
         let token = Uuid::new_v4().to_string();
+        let expires_at = (Utc::now() + chrono::Duration::days(30)).to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (token, username) VALUES (?1, ?2)",
-            params![token, username],
+            "INSERT INTO sessions (token, username, expires_at) VALUES (?1, ?2, ?3)",
+            params![token, username, expires_at],
         )
         .map_err(|e| e.to_string())?;
 
@@ -337,27 +377,41 @@ impl Db {
     }
 
     pub fn validate_token(&self, token: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Utc::now().to_rfc3339();
         conn.query_row(
-            "SELECT username FROM sessions WHERE token = ?1",
-            params![token],
+            "SELECT username FROM sessions WHERE token = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
+            params![token, now],
             |row| row.get(0),
         )
         .ok()
     }
 
+    pub fn delete_session(&self, token: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", params![token]);
+    }
+
     // ── Channels ────────────────────────────────────────────────────
 
     pub fn ensure_channel(&self, name: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT OR IGNORE INTO channels(name) VALUES (?1)",
             params![name],
         );
     }
 
+    pub fn ensure_channel_with_creator(&self, name: &str, creator: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO channels(name, created_by) VALUES (?1, ?2)",
+            params![name, creator],
+        );
+    }
+
     pub fn channel_exists(&self, name: &str) -> bool {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT COUNT(*) > 0 FROM channels WHERE name = ?1",
             params![name],
@@ -366,7 +420,7 @@ impl Db {
     }
 
     pub fn list_channels(&self) -> Vec<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT name FROM channels ORDER BY name")
             .unwrap();
@@ -380,7 +434,7 @@ impl Db {
         if name == "general" {
             return Err("Cannot delete the general channel".into());
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Delete replies for topics in this channel
         conn.execute(
             "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE channel = ?1)",
@@ -398,6 +452,9 @@ impl Db {
         // Delete encryption data
         let _ = conn.execute("DELETE FROM channel_keys WHERE channel = ?1", params![name]);
         let _ = conn.execute("DELETE FROM channel_encryption WHERE channel = ?1", params![name]);
+        // Delete channel members
+        let _ = conn.execute("DELETE FROM channel_members WHERE channel = ?1", params![name]);
+        let _ = conn.execute("DELETE FROM dm_members WHERE channel = ?1", params![name]);
         // Delete channel
         let rows = conn.execute("DELETE FROM channels WHERE name = ?1", params![name])
             .map_err(|e| e.to_string())?;
@@ -420,7 +477,7 @@ impl Db {
         attachments: Option<&Vec<String>>,
         encrypted: bool,
     ) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let ts = timestamp.to_rfc3339();
         let exp = expires_at.map(|e| e.to_rfc3339());
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
@@ -432,7 +489,7 @@ impl Db {
     }
 
     pub fn get_history(&self, channel: &str, limit: u32) -> Vec<HistoryMessage> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
 
         let mut stmt = conn
@@ -495,7 +552,7 @@ impl Db {
 
     /// Delete expired messages, topics, and topic replies. Returns count deleted.
     pub fn purge_expired(&self) -> usize {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let msgs = conn.execute(
             "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?1",
@@ -521,7 +578,7 @@ impl Db {
 
     /// Returns (channel, author) on success
     pub fn get_message_info(&self, id: &str) -> Option<(String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT author, channel FROM messages WHERE id = ?1",
             params![id],
@@ -531,7 +588,7 @@ impl Db {
 
     /// Edit a message's content. Returns (channel, author).
     pub fn edit_message(&self, id: &str, content: &str) -> Result<(String, String), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let (channel, author): (String, String) = conn.query_row(
             "SELECT channel, author FROM messages WHERE id = ?1",
             params![id],
@@ -548,7 +605,7 @@ impl Db {
 
     /// Delete a message. Returns (channel, author).
     pub fn delete_message(&self, id: &str) -> Result<(String, String), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let (channel, author): (String, String) = conn.query_row(
             "SELECT channel, author FROM messages WHERE id = ?1",
             params![id],
@@ -563,7 +620,7 @@ impl Db {
     // ── Edit/Delete topics ──────────────────────────────────────────
 
     pub fn get_topic_author(&self, id: &str) -> Option<(String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT author, channel FROM topics WHERE id = ?1",
             params![id],
@@ -572,7 +629,7 @@ impl Db {
     }
 
     pub fn edit_topic(&self, id: &str, title: Option<&str>, body: Option<&str>) -> Result<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let channel: String = conn.query_row(
             "SELECT channel FROM topics WHERE id = ?1",
             params![id],
@@ -594,7 +651,7 @@ impl Db {
     }
 
     pub fn delete_topic(&self, id: &str) -> Result<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let channel: String = conn.query_row(
             "SELECT channel FROM topics WHERE id = ?1",
             params![id],
@@ -612,7 +669,7 @@ impl Db {
     // ── Edit/Delete topic replies ───────────────────────────────────
 
     pub fn get_reply_author(&self, id: &str) -> Option<(String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT author, topic_id FROM topic_replies WHERE id = ?1",
             params![id],
@@ -621,7 +678,7 @@ impl Db {
     }
 
     pub fn edit_topic_reply(&self, id: &str, content: &str) -> Result<(String, String), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let (topic_id, author): (String, String) = conn.query_row(
             "SELECT topic_id, author FROM topic_replies WHERE id = ?1",
             params![id],
@@ -637,7 +694,7 @@ impl Db {
     }
 
     pub fn delete_topic_reply(&self, id: &str) -> Result<(String, String), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let (topic_id, author): (String, String) = conn.query_row(
             "SELECT topic_id, author FROM topic_replies WHERE id = ?1",
             params![id],
@@ -659,17 +716,18 @@ impl Db {
         mime_type: &str,
         uploader: &str,
         channel: &str,
+        encrypted: bool,
     ) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
-            "INSERT INTO files (id, filename, size, mime_type, uploader, channel)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, filename, size, mime_type, uploader, channel],
+            "INSERT INTO files (id, filename, size, mime_type, uploader, channel, encrypted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, filename, size, mime_type, uploader, channel, encrypted as i32],
         );
     }
 
     pub fn get_file(&self, id: &str) -> Option<FileInfo> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         self.get_file_inner(&conn, id)
     }
 
@@ -679,7 +737,7 @@ impl Db {
         &self, id: &str, channel: &str, title: &str, body: &str, author: &str,
         expires_at: Option<&str>, attachments: Option<&Vec<String>>, encrypted: bool,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
         conn.execute(
@@ -691,7 +749,7 @@ impl Db {
     }
 
     pub fn list_topics(&self, channel: &str, limit: u32) -> Vec<TopicSummary> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.channel, t.title, t.author, t.created_at, t.pinned,
@@ -723,7 +781,7 @@ impl Db {
     }
 
     pub fn get_topic(&self, topic_id: &str) -> Option<TopicDetailData> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT id, channel, title, body, author, created_at, pinned, expires_at, attachments, edited_at, encrypted FROM topics WHERE id = ?1",
             params![topic_id],
@@ -751,7 +809,7 @@ impl Db {
     }
 
     pub fn get_topic_replies(&self, topic_id: &str, limit: u32) -> Vec<TopicReplyData> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT id, topic_id, author, content, created_at, expires_at, attachments, edited_at, encrypted FROM topic_replies
@@ -783,7 +841,7 @@ impl Db {
         &self, id: &str, topic_id: &str, author: &str, content: &str,
         expires_at: Option<&str>, attachments: Option<&Vec<String>>, encrypted: bool,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Verify topic exists
         let exists: bool = conn.query_row(
             "SELECT COUNT(*) > 0 FROM topics WHERE id = ?1",
@@ -804,7 +862,7 @@ impl Db {
     }
 
     pub fn pin_topic(&self, topic_id: &str, pinned: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "UPDATE topics SET pinned = ?2 WHERE id = ?1",
             params![topic_id, pinned as i32],
@@ -818,7 +876,7 @@ impl Db {
     // ── Roles & Permissions ─────────────────────────────────────────
 
     pub fn upsert_role(&self, name: &str, permissions: &[String]) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let perms_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".to_string());
         let _ = conn.execute(
             "INSERT INTO roles(name, permissions) VALUES(?1, ?2)
@@ -828,7 +886,7 @@ impl Db {
     }
 
     pub fn upsert_role_with_quota(&self, name: &str, permissions: &[String], disk_quota_mb: i64) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let perms_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".to_string());
         let _ = conn.execute(
             "INSERT INTO roles(name, permissions, disk_quota_mb) VALUES(?1, ?2, ?3)
@@ -841,7 +899,7 @@ impl Db {
         if name == "user" || name == "admin" {
             return Err("Cannot delete built-in roles".into());
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM user_roles WHERE role_name = ?1", params![name])
             .map_err(|e| e.to_string())?;
         let rows = conn.execute("DELETE FROM roles WHERE name = ?1", params![name])
@@ -853,7 +911,7 @@ impl Db {
     }
 
     pub fn list_roles(&self) -> Vec<RoleInfo> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT name, permissions, disk_quota_mb FROM roles ORDER BY name").unwrap();
         stmt.query_map([], |row| {
             let perms_json: String = row.get(1)?;
@@ -868,7 +926,7 @@ impl Db {
 
     /// Assign the "user" role to all existing users who have no roles at all.
     pub fn backfill_user_roles(&self) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT OR IGNORE INTO user_roles(username, role_name)
              SELECT u.username, 'user' FROM users u
@@ -878,7 +936,7 @@ impl Db {
     }
 
     pub fn assign_role(&self, username: &str, role: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR IGNORE INTO user_roles(username, role_name) VALUES(?1, ?2)",
             params![username, role],
@@ -887,7 +945,7 @@ impl Db {
     }
 
     pub fn remove_role(&self, username: &str, role: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "DELETE FROM user_roles WHERE username = ?1 AND role_name = ?2",
             params![username, role],
@@ -896,7 +954,7 @@ impl Db {
     }
 
     pub fn get_user_roles(&self, username: &str) -> Vec<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT role_name FROM user_roles WHERE username = ?1 ORDER BY role_name"
         ).unwrap();
@@ -907,7 +965,7 @@ impl Db {
     }
 
     pub fn get_user_permissions(&self, username: &str) -> Vec<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT r.permissions FROM roles r
              INNER JOIN user_roles ur ON ur.role_name = r.name
@@ -936,7 +994,7 @@ impl Db {
     // ── Settings ────────────────────────────────────────────────────
 
     pub fn get_settings(&self) -> HashMap<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT key, value FROM settings").unwrap();
         let mut map = HashMap::new();
         let rows: Vec<(String, String)> = stmt.query_map([], |row| {
@@ -949,7 +1007,7 @@ impl Db {
     }
 
     pub fn get_setting(&self, key: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT value FROM settings WHERE key = ?1",
             params![key],
@@ -958,7 +1016,7 @@ impl Db {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO settings(key, value) VALUES(?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = ?2",
@@ -970,8 +1028,8 @@ impl Db {
     // ── Invite codes ────────────────────────────────────────────────
 
     pub fn create_invite(&self, created_by: &str) -> String {
-        let code = Uuid::new_v4().to_string()[..8].to_string();
-        let conn = self.conn.lock().unwrap();
+        let code = Uuid::new_v4().to_string();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let _ = conn.execute(
             "INSERT INTO invite_codes(code, created_by, created_at) VALUES(?1, ?2, ?3)",
@@ -981,7 +1039,7 @@ impl Db {
     }
 
     pub fn list_invites(&self) -> Vec<InviteInfo> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT code, created_by, created_at, used_by, used_at FROM invite_codes ORDER BY created_at DESC"
         ).unwrap();
@@ -997,7 +1055,7 @@ impl Db {
     }
 
     pub fn validate_invite(&self, code: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let used: Option<String> = conn.query_row(
             "SELECT used_by FROM invite_codes WHERE code = ?1",
             params![code],
@@ -1011,7 +1069,7 @@ impl Db {
     }
 
     pub fn use_invite(&self, code: &str, username: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE invite_codes SET used_by = ?2, used_at = ?3 WHERE code = ?1 AND used_by IS NULL",
@@ -1023,7 +1081,7 @@ impl Db {
     // ── Direct Messages ─────────────────────────────────────────
 
     pub fn add_dm_member(&self, channel: &str, username: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT OR IGNORE INTO dm_members(channel, username) VALUES(?1, ?2)",
             params![channel, username],
@@ -1031,7 +1089,7 @@ impl Db {
     }
 
     pub fn is_dm_member(&self, channel: &str, username: &str) -> bool {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT COUNT(*) > 0 FROM dm_members WHERE channel = ?1 AND username = ?2",
             params![channel, username],
@@ -1040,7 +1098,7 @@ impl Db {
     }
 
     pub fn list_user_dms(&self, username: &str) -> Vec<DMInfo> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT channel FROM dm_members WHERE username = ?1"
         ).unwrap();
@@ -1065,10 +1123,100 @@ impl Db {
         name.starts_with("dm:")
     }
 
+    // ── Channel access control ─────────────────────────────────────
+
+    pub fn set_channel_restricted(&self, channel: &str, restricted: bool) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute(
+            "UPDATE channels SET restricted = ?2 WHERE name = ?1",
+            params![channel, restricted as i32],
+        );
+    }
+
+    pub fn is_channel_restricted(&self, channel: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT restricted FROM channels WHERE name = ?1",
+            params![channel],
+            |row| row.get::<_, i32>(0),
+        ).map(|v| v != 0).unwrap_or(false)
+    }
+
+    pub fn add_channel_member(&self, channel: &str, username: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO channel_members(channel, username) VALUES(?1, ?2)",
+            params![channel, username],
+        );
+    }
+
+    pub fn remove_channel_member(&self, channel: &str, username: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute(
+            "DELETE FROM channel_members WHERE channel = ?1 AND username = ?2",
+            params![channel, username],
+        );
+    }
+
+    pub fn get_channel_members(&self, channel: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT username FROM channel_members WHERE channel = ?1 ORDER BY username"
+        ).unwrap();
+        stmt.query_map(params![channel], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    /// Check if a user can access a channel.
+    /// Open channels: everyone. Restricted channels: only members. DM channels: only dm_members.
+    pub fn can_access_channel(&self, channel: &str, username: &str) -> bool {
+        if Self::is_dm_channel(channel) {
+            return self.is_dm_member(channel, username);
+        }
+        if !self.is_channel_restricted(channel) {
+            return true;
+        }
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM channel_members WHERE channel = ?1 AND username = ?2",
+            params![channel, username],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false)
+    }
+
+    pub fn get_channel_creator(&self, channel: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT created_by FROM channels WHERE name = ?1",
+            params![channel],
+            |row| row.get::<_, Option<String>>(0),
+        ).ok().flatten()
+    }
+
+    pub fn set_channel_creator(&self, channel: &str, username: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute(
+            "UPDATE channels SET created_by = ?2 WHERE name = ?1",
+            params![channel, username],
+        );
+    }
+
+    /// Get the channel a file belongs to
+    pub fn get_file_channel(&self, file_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT channel FROM files WHERE id = ?1",
+            params![file_id],
+            |row| row.get::<_, String>(0),
+        ).ok()
+    }
+
     // ── E2E Encryption ────────────────────────────────────────────
 
     pub fn store_public_key(&self, username: &str, public_key: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT INTO user_public_keys(username, public_key) VALUES(?1, ?2)
              ON CONFLICT(username) DO UPDATE SET public_key = ?2, uploaded_at = datetime('now')",
@@ -1077,7 +1225,7 @@ impl Db {
     }
 
     pub fn get_public_key(&self, username: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT public_key FROM user_public_keys WHERE username = ?1",
             params![username],
@@ -1086,7 +1234,7 @@ impl Db {
     }
 
     pub fn get_public_keys(&self, usernames: &[String]) -> HashMap<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut map = HashMap::new();
         for u in usernames {
             if let Ok(key) = conn.query_row(
@@ -1101,7 +1249,7 @@ impl Db {
     }
 
     pub fn set_channel_encrypted(&self, channel: &str, created_by: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT OR IGNORE INTO channel_encryption(channel, created_by) VALUES(?1, ?2)",
             params![channel, created_by],
@@ -1109,7 +1257,7 @@ impl Db {
     }
 
     pub fn is_channel_encrypted(&self, channel: &str) -> bool {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT COUNT(*) > 0 FROM channel_encryption WHERE channel = ?1",
             params![channel],
@@ -1118,7 +1266,7 @@ impl Db {
     }
 
     pub fn store_channel_key(&self, channel: &str, username: &str, encrypted_key: &str, key_version: i32) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT INTO channel_keys(channel, username, encrypted_key, key_version) VALUES(?1, ?2, ?3, ?4)
              ON CONFLICT(channel, username, key_version) DO UPDATE SET encrypted_key = ?3, updated_at = datetime('now')",
@@ -1127,7 +1275,7 @@ impl Db {
     }
 
     pub fn get_channel_key(&self, channel: &str, username: &str) -> Option<(String, i32)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Get the latest version key for this user
         conn.query_row(
             "SELECT encrypted_key, key_version FROM channel_keys
@@ -1139,7 +1287,7 @@ impl Db {
     }
 
     pub fn get_channel_key_holders(&self, channel: &str, key_version: i32) -> Vec<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT username FROM channel_keys WHERE channel = ?1 AND key_version = ?2"
         ).unwrap();
@@ -1150,7 +1298,7 @@ impl Db {
     }
 
     pub fn increment_channel_key_version(&self, channel: &str) -> i32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "UPDATE channel_encryption SET key_version = key_version + 1 WHERE channel = ?1",
             params![channel],
@@ -1163,7 +1311,7 @@ impl Db {
     }
 
     pub fn delete_channel_keys_for_user(&self, channel: &str, username: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "DELETE FROM channel_keys WHERE channel = ?1 AND username = ?2",
             params![channel, username],
@@ -1171,7 +1319,7 @@ impl Db {
     }
 
     pub fn get_channel_key_version(&self, channel: &str) -> i32 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT key_version FROM channel_encryption WHERE channel = ?1",
             params![channel],
@@ -1182,7 +1330,7 @@ impl Db {
     // ── File Management (quotas, pinning) ─────────────────────────
 
     pub fn get_user_disk_usage(&self, username: &str) -> i64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT COALESCE(SUM(size), 0) FROM files WHERE uploader = ?1",
             params![username],
@@ -1191,7 +1339,7 @@ impl Db {
     }
 
     pub fn get_user_quota(&self, username: &str) -> i64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Get max disk_quota_mb across user's roles; 0 = unlimited
         let quota_mb: i64 = conn.query_row(
             "SELECT COALESCE(MAX(r.disk_quota_mb), 0) FROM roles r
@@ -1204,9 +1352,9 @@ impl Db {
     }
 
     pub fn list_user_files(&self, username: &str) -> Vec<UserFileInfo> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, filename, size, mime_type, channel, created_at, pinned FROM files
+            "SELECT id, filename, size, mime_type, channel, created_at, pinned, encrypted FROM files
              WHERE uploader = ?1 ORDER BY created_at DESC"
         ).unwrap();
         stmt.query_map(params![username], |row| {
@@ -1218,12 +1366,13 @@ impl Db {
                 channel: row.get(4)?,
                 created_at: row.get(5)?,
                 pinned: row.get::<_, i32>(6).unwrap_or(0) != 0,
+                encrypted: row.get::<_, i32>(7).unwrap_or(0) != 0,
             })
         }).unwrap().filter_map(|r| r.ok()).collect()
     }
 
     pub fn set_file_pinned(&self, file_id: &str, pinned: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "UPDATE files SET pinned = ?2 WHERE id = ?1",
             params![file_id, pinned as i32],
@@ -1233,7 +1382,7 @@ impl Db {
     }
 
     pub fn get_file_owner(&self, file_id: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT uploader FROM files WHERE id = ?1",
             params![file_id],
@@ -1242,7 +1391,7 @@ impl Db {
     }
 
     pub fn delete_file_record(&self, file_id: &str) -> Option<(String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Get filename extension for disk cleanup
         let info: Option<(String, String)> = conn.query_row(
             "SELECT id, filename FROM files WHERE id = ?1",
@@ -1257,7 +1406,7 @@ impl Db {
 
     pub fn get_released_files_for_user(&self, username: &str) -> Vec<(String, String, i64)> {
         // Returns (file_id, filename, size) of unpinned files, oldest first
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, filename, size FROM files WHERE uploader = ?1 AND pinned = 0 ORDER BY created_at ASC"
         ).unwrap();
@@ -1269,7 +1418,7 @@ impl Db {
     // ── Search ──────────────────────────────────────────────────────
 
     pub fn search_messages(&self, query: &str, channel: Option<&str>, limit: u32) -> Vec<SearchResult> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let pattern = format!("%{}%", query);
         if let Some(ch) = channel {
@@ -1308,7 +1457,7 @@ impl Db {
     }
 
     pub fn update_role_quota(&self, name: &str, disk_quota_mb: i64) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "UPDATE roles SET disk_quota_mb = ?2 WHERE name = ?1",
             params![name, disk_quota_mb],
@@ -1322,7 +1471,7 @@ impl Db {
     // ── Voice Channel Types & TTL ─────────────────────────────────
 
     pub fn create_channel_with_type(&self, name: &str, channel_type: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "INSERT OR IGNORE INTO channels(name, channel_type) VALUES (?1, ?2)",
             params![name, channel_type],
@@ -1336,7 +1485,7 @@ impl Db {
     }
 
     pub fn get_channel_type(&self, name: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT channel_type FROM channels WHERE name = ?1",
             params![name],
@@ -1345,7 +1494,7 @@ impl Db {
     }
 
     pub fn list_channels_with_type(&self) -> Vec<(String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT name, COALESCE(channel_type, 'text') FROM channels ORDER BY name"
         ).unwrap();
@@ -1356,7 +1505,7 @@ impl Db {
     }
 
     pub fn mark_voice_channel_occupied(&self, channel: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let _ = conn.execute(
             "UPDATE voice_channel_ttl SET empty_since = NULL WHERE channel = ?1",
             params![channel],
@@ -1364,7 +1513,7 @@ impl Db {
     }
 
     pub fn mark_voice_channel_empty(&self, channel: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let _ = conn.execute(
             "UPDATE voice_channel_ttl SET empty_since = ?2 WHERE channel = ?1",
@@ -1373,7 +1522,7 @@ impl Db {
     }
 
     pub fn get_voice_channels_pending_expiry(&self) -> Vec<(String, i64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT channel, default_ttl_secs FROM voice_channel_ttl
@@ -1386,7 +1535,7 @@ impl Db {
     }
 
     pub fn expire_voice_channel_messages(&self, channel: &str) -> usize {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Delete messages without explicit TTL (expires_at IS NULL) in this voice channel
         let msgs = conn.execute(
             "DELETE FROM messages WHERE channel = ?1 AND expires_at IS NULL",
@@ -1411,7 +1560,7 @@ impl Db {
 
     fn get_file_inner(&self, conn: &Connection, id: &str) -> Option<FileInfo> {
         conn.query_row(
-            "SELECT id, filename, size, mime_type FROM files WHERE id = ?1",
+            "SELECT id, filename, size, mime_type, encrypted FROM files WHERE id = ?1",
             params![id],
             |row| {
                 let file_id: String = row.get(0)?;
@@ -1421,6 +1570,7 @@ impl Db {
                     filename: row.get(1)?,
                     size: row.get(2)?,
                     mime_type: row.get(3)?,
+                    encrypted: row.get::<_, i32>(4).unwrap_or(0) != 0,
                 })
             },
         )

@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gathering</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Ez8Mf/S2V4GlprZo3QLUAv0sFNoRZuOv5aMhBLO" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -99,6 +99,8 @@
       <div class="chat-header">
         <h2 id="chat-channel-name">#general</h2>
         <span class="typing" id="typing-indicator"></span>
+        <button class="request-key-btn" id="request-key-btn" onclick="requestChannelKey()" style="display:none;" title="Request encryption key for this channel">Request Key</button>
+        <button class="search-toggle-btn" onclick="openChannelSettings()" title="Channel Settings">&#x2699;</button>
         <button class="search-toggle-btn" onclick="toggleSearch()" title="Search">&#x1F50D;</button>
         <div class="view-toggle">
           <button id="view-chat-btn" class="active" onclick="switchView('chat')">Chat</button>
@@ -235,6 +237,19 @@
     </div>
     <div class="admin-tab-content" id="files-content">
       <div style="color:var(--text2);font-size:0.8rem;">Loading files...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Channel Settings Overlay -->
+<div class="admin-overlay" id="channel-settings-overlay" onclick="if(event.target===this)closeChannelSettings()">
+  <div class="admin-panel">
+    <div class="admin-panel-header">
+      <h2>Channel Settings</h2>
+      <button class="admin-panel-close" onclick="closeChannelSettings()">&times;</button>
+    </div>
+    <div class="admin-tab-content" id="channel-settings-content">
+      <div style="color:var(--text2);font-size:0.8rem;">Loading...</div>
     </div>
   </div>
 </div>

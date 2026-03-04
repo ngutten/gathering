@@ -17,8 +17,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::time::Instant;
 
 use crate::db::Db;
 use crate::hub::Hub;
@@ -29,6 +33,27 @@ struct AppState {
     db: Arc<Db>,
     data_dir: PathBuf,
     config: ServerConfig,
+    rate_limiter: tokio::sync::Mutex<HashMap<IpAddr, (u32, Instant)>>,
+}
+
+impl AppState {
+    /// Check rate limit for an IP. Returns true if request should be allowed.
+    async fn check_rate_limit(&self, ip: IpAddr, max_requests: u32, window_secs: u64) -> bool {
+        let mut limiter = self.rate_limiter.lock().await;
+        let now = Instant::now();
+        let entry = limiter.entry(ip).or_insert((0, now));
+
+        if now.duration_since(entry.1).as_secs() >= window_secs {
+            // Reset window
+            *entry = (1, now);
+            true
+        } else if entry.0 >= max_requests {
+            false
+        } else {
+            entry.0 += 1;
+            true
+        }
+    }
 }
 
 #[tokio::main]
@@ -84,7 +109,13 @@ async fn main() {
     }
 
     let hub = Hub::new(db.clone(), data_dir.clone());
-    let state = Arc::new(AppState { hub, db: db.clone(), data_dir: data_dir.clone(), config });
+    let state = Arc::new(AppState {
+        hub,
+        db: db.clone(),
+        data_dir: data_dir.clone(),
+        config,
+        rate_limiter: tokio::sync::Mutex::new(HashMap::new()),
+    });
 
     tls::ensure_tls(&data_dir);
 
@@ -119,15 +150,13 @@ async fn main() {
     let app = Router::new()
         .route("/api/register", post(handle_register))
         .route("/api/login", post(handle_login))
+        .route("/api/logout", post(handle_logout))
         .route("/api/server-info", get(handle_server_info))
         .route("/api/upload", post(handle_upload).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
         .route("/api/files/:id", get(handle_download))
         .route("/ws", get(ws_upgrade))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
-        .layer(CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any))
+        .layer(CorsLayer::new()) // S3: same-origin only (no permissive CORS)
         .layer(Extension(state));
 
     let port: u16 = std::env::var("GATHERING_PORT")
@@ -146,11 +175,24 @@ async fn main() {
     tracing::info!("Gathering HTTPS on https://{}", tls_addr);
     tracing::info!("Gathering HTTP  on http://{}", http_addr);
 
-    // Spawn HTTP server on secondary port (full app, for native clients)
-    let http_app = app.clone();
+    // S6: HTTP server only redirects to HTTPS (no auth/upload/ws endpoints)
+    let https_port = port;
+    let http_redirect = Router::new()
+        .fallback(move |req: http::Request<axum::body::Body>| async move {
+            let host = req.headers()
+                .get(http::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("localhost")
+                .split(':')
+                .next()
+                .unwrap_or("localhost");
+            let path = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+            let redirect_url = format!("https://{}:{}{}", host, https_port, path);
+            Redirect::permanent(&redirect_url)
+        });
     tokio::spawn(async move {
         axum::Server::bind(&http_addr)
-            .serve(http_app.into_make_service())
+            .serve(http_redirect.into_make_service())
             .await
             .unwrap();
     });
@@ -158,7 +200,7 @@ async fn main() {
     // Run HTTPS server on main port
     let tls_config = tls::load_rustls_config(&data_dir).await;
     axum_server::bind_rustls(tls_addr, tls_config)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
 }
@@ -176,8 +218,16 @@ async fn handle_server_info(
 
 async fn handle_register(
     Extension(state): Extension<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> impl IntoResponse {
+    // S5: Rate limiting
+    if !state.check_rate_limit(addr.ip(), 10, 60).await {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(AuthResponse {
+            ok: false, token: None,
+            error: Some("Too many requests. Try again later.".into()),
+        }));
+    }
     if req.username.len() < 2 || req.username.len() > 32 {
         return (StatusCode::BAD_REQUEST, Json(AuthResponse {
             ok: false, token: None,
@@ -264,8 +314,17 @@ async fn handle_register(
 
 async fn handle_login(
     Extension(state): Extension<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    // S5: Rate limiting
+    if !state.check_rate_limit(addr.ip(), 10, 60).await {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(AuthResponse {
+            ok: false, token: None,
+            error: Some("Too many requests. Try again later.".into()),
+        }));
+    }
+
     match state.db.login(&req.username, &req.password) {
         Ok(token) => {
             tracing::info!("Login: {}", req.username);
@@ -277,6 +336,23 @@ async fn handle_login(
             ok: false, token: None, error: Some(e),
         })),
     }
+}
+
+async fn handle_logout(
+    Extension(state): Extension<Arc<AppState>>,
+    headers: http::HeaderMap,
+) -> impl IntoResponse {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    if !token.is_empty() {
+        state.db.delete_session(token);
+    }
+
+    StatusCode::OK
 }
 
 // ── File upload ─────────────────────────────────────────────────────
@@ -304,8 +380,16 @@ async fn handle_upload(
         }
     };
 
+    // S8: Check upload_file permission
+    if !state.db.user_has_permission(&username, "upload_file") {
+        return (StatusCode::FORBIDDEN, Json(UploadResponse {
+            ok: false, file: None, error: Some("Permission denied: upload_file".into()),
+        }));
+    }
+
     let mut file_data: Option<(String, Vec<u8>)> = None;
     let mut channel = String::new();
+    let mut encrypted = false;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
@@ -334,6 +418,12 @@ async fn handle_upload(
                     channel = String::from_utf8_lossy(&bytes).to_string();
                 }
             }
+            "encrypted" => {
+                if let Ok(bytes) = field.bytes().await {
+                    let val = String::from_utf8_lossy(&bytes);
+                    encrypted = val == "true" || val == "1";
+                }
+            }
             _ => {}
         }
     }
@@ -349,6 +439,13 @@ async fn handle_upload(
 
     if channel.is_empty() {
         channel = "general".to_string();
+    }
+
+    // Check channel access for restricted channels
+    if !state.db.can_access_channel(&channel, &username) {
+        return (StatusCode::FORBIDDEN, Json(UploadResponse {
+            ok: false, file: None, error: Some("Access denied: channel is restricted".into()),
+        }));
     }
 
     // Check disk quota
@@ -399,7 +496,7 @@ async fn handle_upload(
     }
 
     let size = data.len() as i64;
-    state.db.store_file(&file_id, &filename, size, &mime_type, &username, &channel);
+    state.db.store_file(&file_id, &filename, size, &mime_type, &username, &channel, encrypted);
 
     let info = FileInfo {
         id: file_id,
@@ -407,6 +504,7 @@ async fn handle_upload(
         size,
         mime_type,
         url: format!("/api/files/{}", disk_name.split('.').next().unwrap_or("")),
+        encrypted,
     };
 
     tracing::info!("File uploaded: {} by {}", info.filename, username);
@@ -419,12 +517,33 @@ async fn handle_upload(
 async fn handle_download(
     Extension(state): Extension<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
+    axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
     headers: http::HeaderMap,
 ) -> impl IntoResponse {
+    // S2: Authenticate downloads (Bearer header or ?token= query param for media elements)
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| query.get("token").cloned());
+
+    let username = match token.as_deref().and_then(|t| state.db.validate_token(t)) {
+        Some(u) => u,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
     let file_info = match state.db.get_file(&id) {
         Some(f) => f,
         None => return Err(StatusCode::NOT_FOUND),
     };
+
+    // Check channel access for restricted channels
+    if let Some(channel) = state.db.get_file_channel(&id) {
+        if !state.db.can_access_channel(&channel, &username) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
 
     // Find the file on disk
     let uploads_dir = state.data_dir.join("uploads");
@@ -440,7 +559,12 @@ async fn handle_download(
     };
 
     let total = data.len();
-    let content_disposition = format!("inline; filename=\"{}\"", file_info.filename);
+    // S9: Sanitize filename for Content-Disposition
+    let safe_filename: String = file_info.filename
+        .chars()
+        .filter(|c| *c != '"' && *c != '\\' && *c != '\n' && *c != '\r' && !c.is_control())
+        .collect();
+    let content_disposition = format!("inline; filename=\"{}\"", safe_filename);
 
     // Parse Range header for audio/video seek support
     if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {

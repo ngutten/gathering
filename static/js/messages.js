@@ -3,7 +3,7 @@
 import state, { isDMChannel } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, decryptMessage, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, triggerKeyRotation, renderKeyRequests } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -302,6 +302,7 @@ export function handleServerMsg(msg) {
       const symKey = decryptChannelKey(msg.encrypted_key);
       if (symKey) {
         state.channelKeys[msg.channel] = symKey;
+        updateRequestKeyButton();
         if (msg.channel === state.currentChannel) {
           send('History', { channel: msg.channel, limit: 100 });
           if (state.currentView === 'topics') {
@@ -378,6 +379,34 @@ export function handleServerMsg(msg) {
         state.encryptedChannels.add(dm.channel);
       });
       renderDMList();
+      break;
+
+    // ── Channel Access Control ──
+    case 'ChannelRestricted':
+      if (msg.channel === state.currentChannel) {
+        appendSystem(`Channel is now ${msg.restricted ? 'restricted' : 'open'}`);
+      }
+      break;
+
+    case 'ChannelMemberList':
+      state.channelMemberList = msg.members;
+      state.channelRestricted = msg.restricted;
+      renderChannelMemberPanel(msg);
+      break;
+
+    case 'ChannelMemberAdded':
+      if (msg.channel === state.currentChannel) {
+        appendSystem(`${msg.username} was added to the channel`);
+      }
+      break;
+
+    case 'ChannelMemberRemoved':
+      if (msg.channel === state.currentChannel) {
+        appendSystem(`${msg.username} was removed from the channel`);
+        if (msg.username === state.currentUser) {
+          switchChannel('general');
+        }
+      }
       break;
 
     // ── Search ──

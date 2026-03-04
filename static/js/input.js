@@ -2,7 +2,7 @@
 
 import state, { isDMChannel } from './state.js';
 import { send, apiFetch } from './transport.js';
-import { encryptMessage, encryptChannelKeyForUser, generateChannelKey } from './crypto.js';
+import { encryptMessage, encryptFile, encryptChannelKeyForUser, generateChannelKey } from './crypto.js';
 import { escapeHtml, formatFileSize } from './render.js';
 
 export function sendMessage() {
@@ -104,10 +104,19 @@ export async function handleFileSelect(event) {
       continue;
     }
 
-    progress.textContent = `Uploading ${file.name}...`;
+    const channelKey = state.channelKeys[state.currentChannel];
+    progress.textContent = channelKey ? `Encrypting & uploading ${file.name}...` : `Uploading ${file.name}...`;
 
     const formData = new FormData();
-    formData.append('file', file);
+    if (channelKey) {
+      const buf = await file.arrayBuffer();
+      const encrypted = encryptFile(buf, channelKey);
+      const encBlob = new Blob([encrypted], { type: 'application/octet-stream' });
+      formData.append('file', new File([encBlob], file.name, { type: file.type }));
+      formData.append('encrypted', 'true');
+    } else {
+      formData.append('file', file);
+    }
     formData.append('channel', state.currentChannel);
 
     try {

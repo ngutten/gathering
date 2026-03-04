@@ -99,6 +99,12 @@ pub enum ClientMsg {
     StartDM { target_user: String },
     ListDMs,
 
+    // ── Channel Access Control ──
+    SetChannelRestricted { channel: String, restricted: bool },
+    AddChannelMember { channel: String, username: String },
+    RemoveChannelMember { channel: String, username: String },
+    GetChannelMembers { channel: String },
+
     // ── E2E Encryption ──
     UploadPublicKey { public_key: String },
     GetPublicKeys { usernames: Vec<String> },
@@ -191,6 +197,12 @@ pub enum ServerMsg {
     RoleList { roles: Vec<RoleInfo> },
     UserRoles { username: String, roles: Vec<String> },
 
+    // ── Channel Access Control ──
+    ChannelRestricted { channel: String, restricted: bool },
+    ChannelMemberList { channel: String, members: Vec<String>, restricted: bool },
+    ChannelMemberAdded { channel: String, username: String },
+    ChannelMemberRemoved { channel: String, username: String },
+
     // ── File Management ──
     MyFileList { files: Vec<UserFileInfo>, used_bytes: i64, quota_bytes: i64 },
     FilePinned { file_id: String, pinned: bool },
@@ -235,6 +247,8 @@ pub struct ChannelInfo {
     pub encrypted: bool,
     #[serde(default)]
     pub channel_type: String,
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +258,8 @@ pub struct FileInfo {
     pub size: i64,
     pub mime_type: String,
     pub url: String,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 // ── Topic types ────────────────────────────────────────────────────
@@ -339,6 +355,8 @@ pub struct UserFileInfo {
     pub channel: String,
     pub created_at: String,
     pub pinned: bool,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 // ── Search types ────────────────────────────────────────────────────

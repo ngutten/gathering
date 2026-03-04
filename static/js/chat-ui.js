@@ -2,9 +2,10 @@
 
 import state, { isDMChannel } from './state.js';
 import { send } from './transport.js';
-import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime } from './render.js';
+import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime, renderAttachmentsHtml, decryptAndRenderAttachments } from './render.js';
 import { decryptMessage } from './crypto.js';
-import { apiUrl } from './config.js';
+import { apiUrl, fileUrl } from './config.js';
+
 
 export function appendMessage(msg) {
   if (msg.channel && msg.channel !== state.currentChannel) return;
@@ -53,24 +54,8 @@ export function appendMessage(msg) {
 
   const content = renderRichContent(displayContent);
 
-  // Build attachments HTML
-  let attachHtml = '';
-  if (msg.attachments && msg.attachments.length > 0) {
-    attachHtml = '<div class="attachments">';
-    for (const att of msg.attachments) {
-      const url = escapeHtml(apiUrl(att.url));
-      if (isImageMime(att.mime_type)) {
-        attachHtml += `<a href="${url}" target="_blank"><img class="attachment-img" src="${url}" alt="${escapeHtml(att.filename)}" loading="lazy"></a>`;
-      } else if (isAudioMime(att.mime_type)) {
-        attachHtml += `<div class="attachment-audio"><div class="file-name">${escapeHtml(att.filename)} <span class="file-size">(${formatFileSize(att.size)})</span></div><audio controls preload="metadata" src="${url}"></audio></div>`;
-      } else if (isVideoMime(att.mime_type)) {
-        attachHtml += `<video controls preload="metadata" src="${url}" style="max-width:400px;max-height:300px;border-radius:4px;margin-top:0.3rem;"></video>`;
-      } else {
-        attachHtml += `<div class="attachment"><a href="${url}" download="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</a> <span class="file-size">${formatFileSize(att.size)}</span></div>`;
-      }
-    }
-    attachHtml += '</div>';
-  }
+  // Build attachments HTML (handles encrypted placeholders via render.js)
+  const attachHtml = renderAttachmentsHtml(msg.attachments);
 
   // Action buttons
   let actionsHtml = '';
@@ -90,6 +75,9 @@ export function appendMessage(msg) {
     <div class="body">${content}</div>${attachHtml}`;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
+
+  // Decrypt and render any encrypted attachments now that they're in the DOM
+  decryptAndRenderAttachments(msg.attachments);
 }
 
 export function appendSystem(text) {
@@ -112,12 +100,12 @@ export function renderChannels() {
   // Render text channels
   const el = document.getElementById('channel-list');
   el.innerHTML = textChannels.map(ch => {
-    const lock = ch.encrypted ? '&#x1F512; ' : '#';
+    const lock = ch.encrypted ? '&#x1F512; ' : ch.restricted ? '&#x1F6E1; ' : '#';
     const unread = state.unreadCounts[ch.name] || 0;
     const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
     return `<div class="channel-item${boldClass} ${ch.name === state.currentChannel ? 'active' : ''}"
-         onclick="switchChannel('${ch.name}')">
+         onclick="switchChannel('${escapeHtml(ch.name)}')">
       <span>${lock}${escapeHtml(ch.name)}</span>
       <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
     </div>`;
@@ -313,6 +301,81 @@ export function removeAllVideoTiles() {
   }
 }
 
+export function renderChannelMemberPanel(msg) {
+  const overlay = document.getElementById('channel-settings-overlay');
+  if (!overlay) return;
+  const content = document.getElementById('channel-settings-content');
+  if (!content) return;
+
+  const isAdmin = state.isAdmin;
+  const isCreator = state.channelCreators && state.channelCreators[msg.channel] === state.currentUser;
+  const canManage = isAdmin || isCreator;
+
+  let html = `<div style="margin-bottom:0.5rem;">
+    <strong>${escapeHtml(msg.channel)}</strong>
+    <span style="color:var(--text2);font-size:0.75rem;margin-left:0.5rem;">${msg.restricted ? 'Restricted' : 'Open'}</span>
+  </div>`;
+
+  if (canManage) {
+    html += `<div style="margin-bottom:0.5rem;">
+      <label style="font-size:0.75rem;cursor:pointer;">
+        <input type="checkbox" ${msg.restricted ? 'checked' : ''} onchange="toggleChannelRestricted('${escapeHtml(msg.channel)}', this.checked)">
+        Restrict to members only
+      </label>
+    </div>`;
+  }
+
+  if (msg.restricted) {
+    html += '<div style="font-size:0.75rem;color:var(--text2);margin-bottom:0.3rem;">Members:</div>';
+    for (const member of msg.members) {
+      html += `<div class="user-item" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>${escapeHtml(member)}</span>
+        ${canManage && member !== state.currentUser ? `<button class="admin-btn-sm danger" onclick="removeChannelMember('${escapeHtml(msg.channel)}','${escapeHtml(member)}')">Remove</button>` : ''}
+      </div>`;
+    }
+    if (canManage) {
+      html += `<div style="display:flex;gap:0.3rem;margin-top:0.5rem;">
+        <input type="text" id="add-member-input" placeholder="username" style="flex:1;">
+        <button class="admin-btn-sm" onclick="addChannelMember('${escapeHtml(msg.channel)}')">Add</button>
+      </div>`;
+    }
+  }
+
+  content.innerHTML = html;
+  overlay.classList.add('active');
+}
+
+export function openChannelSettings() {
+  if (!state.currentChannel || state.currentChannel === 'general') return;
+  send('GetChannelMembers', { channel: state.currentChannel });
+}
+
+export function closeChannelSettings() {
+  const overlay = document.getElementById('channel-settings-overlay');
+  if (overlay) overlay.classList.remove('active');
+}
+
+export function toggleChannelRestricted(channel, restricted) {
+  send('SetChannelRestricted', { channel, restricted });
+  // Refresh the member list after a short delay
+  setTimeout(() => send('GetChannelMembers', { channel }), 300);
+}
+
+export function addChannelMember(channel) {
+  const input = document.getElementById('add-member-input');
+  if (!input) return;
+  const username = input.value.trim();
+  if (!username) return;
+  send('AddChannelMember', { channel, username });
+  input.value = '';
+  setTimeout(() => send('GetChannelMembers', { channel }), 300);
+}
+
+export function removeChannelMember(channel, username) {
+  send('RemoveChannelMember', { channel, username });
+  setTimeout(() => send('GetChannelMembers', { channel }), 300);
+}
+
 export function switchChannel(name) {
   state.currentChannel = name;
   state.currentTopicId = null;
@@ -336,14 +399,42 @@ export function switchChannel(name) {
   document.getElementById('messages').innerHTML = '';
   renderChannels();
   renderDMList();
+  updateRequestKeyButton();
   // Import switchView dynamically to avoid circular deps
   import('./topics.js').then(m => m.switchView('chat'));
-  // Auto-join voice channels on the text side so we can send/receive messages
-  if (isVoice) {
-    send('Join', { channel: name });
-  }
-  send('History', { channel: name, limit: 100 });
+  // Always send Join — server is idempotent (skips broadcast if already joined)
+  // and responds with history + channel key delivery
+  send('Join', { channel: name });
   if (state.encryptedChannels.has(name) && !state.channelKeys[name] && state.e2eReady) {
     send('RequestChannelKey', { channel: name });
   }
+}
+
+/** Show/hide the "Request Key" button based on current channel state */
+export function updateRequestKeyButton() {
+  const btn = document.getElementById('request-key-btn');
+  if (!btn) return;
+  const ch = state.currentChannel;
+  const needsKey = state.encryptedChannels.has(ch) && !state.channelKeys[ch] && state.e2eReady;
+  btn.style.display = needsKey ? '' : 'none';
+}
+
+// Client-side rate limit: track last request time per channel
+const _keyRequestTimes = {};
+const KEY_REQUEST_COOLDOWN_MS = 30000; // 30 seconds
+
+export function requestChannelKey() {
+  const ch = state.currentChannel;
+  if (!ch || !state.encryptedChannels.has(ch) || state.channelKeys[ch]) return;
+
+  const now = Date.now();
+  const last = _keyRequestTimes[ch] || 0;
+  if (now - last < KEY_REQUEST_COOLDOWN_MS) {
+    const wait = Math.ceil((KEY_REQUEST_COOLDOWN_MS - (now - last)) / 1000);
+    appendSystem(`Key request cooldown — try again in ${wait}s`);
+    return;
+  }
+  _keyRequestTimes[ch] = now;
+  send('RequestChannelKey', { channel: ch });
+  appendSystem('Requested encryption key from online channel members...');
 }

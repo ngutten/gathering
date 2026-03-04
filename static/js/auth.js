@@ -3,6 +3,7 @@
 import state from './state.js';
 import { apiUrl } from './config.js';
 import { connectWS } from './transport.js';
+import { apiFetch } from './transport.js';
 
 export async function checkServerInfo() {
   try {
@@ -60,7 +61,11 @@ export async function doAuth(endpoint) {
 export function doLogin() { doAuth('login'); }
 export function doRegister() { doAuth('register'); }
 
-export function doLogout() {
+export async function doLogout() {
+  // S4: Server-side logout
+  try {
+    await apiFetch('/api/logout', { method: 'POST' });
+  } catch (e) {}
   localStorage.removeItem('gathering_token');
   state.token = null;
   if (state.ws) {

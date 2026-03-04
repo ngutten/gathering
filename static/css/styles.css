@@ -437,6 +437,10 @@
                        color: var(--text2); cursor: pointer; padding: 0.2rem 0.4rem; font-size: 0.8rem;
                        line-height: 1; margin-left: auto; }
   .search-toggle-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .request-key-btn { background: none; border: 1px solid var(--orange); border-radius: 4px;
+                     color: var(--orange); cursor: pointer; padding: 0.2rem 0.5rem; font-size: 0.7rem;
+                     font-family: inherit; line-height: 1; margin-left: 0.3rem; }
+  .request-key-btn:hover { background: var(--orange); color: #000; }
   .search-bar { display: flex; gap: 0.4rem; padding: 0.4rem 1rem; border-bottom: 1px solid var(--border);
                 background: var(--bg2); align-items: center; }
   .search-bar input { flex: 1; padding: 0.35rem 0.5rem; background: var(--bg); border: 1px solid var(--border);

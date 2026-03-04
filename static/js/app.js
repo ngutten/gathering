@@ -4,14 +4,14 @@ import state, { on } from './state.js';
 import { connectWS } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
-import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey } from './chat-ui.js';
 import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, removePendingFile, startEditMessage, cancelEdit, deleteMessage, joinChannel } from './input.js';
 import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
 import { openAdminPanel, closeAdminPanel, switchAdminTab, updateSetting, deleteChannel, createInvite, assignRoleToUser, removeRoleFromUser } from './admin.js';
 import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest } from './crypto.js';
 import { toggleEmojiPicker } from './emoji.js';
-import { openFileManager, closeFileManager, toggleFilePin, deleteUserFile } from './files.js';
+import { openFileManager, closeFileManager, toggleFilePin, deleteUserFile, downloadFile } from './files.js';
 import { toggleSearch, closeSearch, executeSearch, scrollToMessage } from './search.js';
 
 // ── Wire event emitter ──
@@ -78,10 +78,17 @@ window.openFileManager = openFileManager;
 window.closeFileManager = closeFileManager;
 window.toggleFilePin = toggleFilePin;
 window.deleteUserFile = deleteUserFile;
+window.downloadFile = downloadFile;
 window.toggleSearch = toggleSearch;
 window.closeSearch = closeSearch;
 window.executeSearch = executeSearch;
 window.scrollToMessage = scrollToMessage;
+window.openChannelSettings = openChannelSettings;
+window.closeChannelSettings = closeChannelSettings;
+window.toggleChannelRestricted = toggleChannelRestricted;
+window.addChannelMember = addChannelMember;
+window.removeChannelMember = removeChannelMember;
+window.requestChannelKey = requestChannelKey;
 
 // ── Initialize ──
 checkServerInfo();

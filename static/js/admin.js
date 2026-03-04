@@ -89,9 +89,10 @@ export function renderAdminInvites(invites) {
   let html = `<button class="admin-btn-sm" onclick="createInvite()">Generate Invite Code</button>`;
 
   if (state.lastCreatedInvite) {
+    const safeCode = escapeHtml(state.lastCreatedInvite);
     html += `<div class="invite-code-display" style="margin-top:0.5rem;">
-      <code>${escapeHtml(state.lastCreatedInvite)}</code>
-      <button onclick="navigator.clipboard.writeText('${state.lastCreatedInvite}');this.textContent='Copied!'">Copy</button>
+      <code>${safeCode}</code>
+      <button data-invite-code="${safeCode}" onclick="navigator.clipboard.writeText(this.dataset.inviteCode);this.textContent='Copied!'">Copy</button>
     </div>`;
   }
 
@@ -124,7 +125,7 @@ export function renderAdminRoles(roles) {
         <span class="role-item-name">${escapeHtml(role.name)}</span>
         <span class="role-item-perms">Quota: ${quotaLabel}</span>
       </div>
-      <div class="role-item-perms">${role.permissions.join(', ') || 'none'}</div>
+      <div class="role-item-perms">${role.permissions.map(p => escapeHtml(p)).join(', ') || 'none'}</div>
     </div>`;
   }
 

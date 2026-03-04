@@ -1,7 +1,8 @@
 // render.js — Pure rendering utilities
 
-import { apiUrl } from './config.js';
+import { fileUrl } from './config.js';
 import { convertShortcodes } from './emoji.js';
+import state from './state.js';
 
 export function escapeHtml(s) {
   const d = document.createElement('div');
@@ -61,11 +62,11 @@ export function renderRichContent(raw) {
   text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
   text = text.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
-  // Links [text](url)
-  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Links [text](url) — only allow http/https URLs
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)"]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 
   // Auto-link URLs (not already inside href or tags)
-  text = text.replace(/(^|[^"=])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  text = text.replace(/(^|[^"=])(https?:\/\/[^\s<"]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
 
   // Blockquotes (lines starting with >)
   text = text.replace(/(^|\n)&gt; (.+)/g, '$1<blockquote>$2</blockquote>');
@@ -195,17 +196,81 @@ export function renderAttachmentsHtml(attachments) {
   if (!attachments || attachments.length === 0) return '';
   let html = '<div class="attachments">';
   for (const att of attachments) {
-    const url = escapeHtml(apiUrl(att.url));
-    if (isImageMime(att.mime_type)) {
-      html += `<a href="${url}" target="_blank"><img class="attachment-img" src="${url}" alt="${escapeHtml(att.filename)}" loading="lazy"></a>`;
-    } else if (isAudioMime(att.mime_type)) {
-      html += `<div class="attachment-audio"><div class="file-name">${escapeHtml(att.filename)} <span class="file-size">(${formatFileSize(att.size)})</span></div><audio controls preload="metadata" src="${url}"></audio></div>`;
-    } else if (isVideoMime(att.mime_type)) {
-      html += `<video controls preload="metadata" src="${url}" style="max-width:400px;max-height:300px;border-radius:4px;margin-top:0.3rem;"></video>`;
+    if (att.encrypted) {
+      // Encrypted attachment: render placeholder, decrypt after DOM insertion
+      const placeholderId = 'enc-att-' + att.id;
+      if (isImageMime(att.mime_type)) {
+        html += `<a href="#" target="_blank" data-enc-att="${att.id}"><img class="attachment-img" id="${placeholderId}" alt="${escapeHtml(att.filename)}" loading="lazy" style="min-height:40px;background:var(--bg2);"></a>`;
+      } else if (isAudioMime(att.mime_type)) {
+        html += `<div class="attachment-audio"><div class="file-name">${escapeHtml(att.filename)} <span class="file-size">(${formatFileSize(att.size)})</span></div><audio controls preload="metadata" id="${placeholderId}"></audio></div>`;
+      } else if (isVideoMime(att.mime_type)) {
+        html += `<video controls preload="metadata" id="${placeholderId}" style="max-width:400px;max-height:300px;border-radius:4px;margin-top:0.3rem;"></video>`;
+      } else {
+        html += `<div class="attachment"><a href="#" id="${placeholderId}" data-enc-att="${att.id}">${escapeHtml(att.filename)}</a> <span class="file-size">${formatFileSize(att.size)}</span></div>`;
+      }
     } else {
-      html += `<div class="attachment"><a href="${url}" download="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</a> <span class="file-size">${formatFileSize(att.size)}</span></div>`;
+      const url = escapeHtml(fileUrl(att.url));
+      if (isImageMime(att.mime_type)) {
+        html += `<a href="${url}" target="_blank"><img class="attachment-img" src="${url}" alt="${escapeHtml(att.filename)}" loading="lazy"></a>`;
+      } else if (isAudioMime(att.mime_type)) {
+        html += `<div class="attachment-audio"><div class="file-name">${escapeHtml(att.filename)} <span class="file-size">(${formatFileSize(att.size)})</span></div><audio controls preload="metadata" src="${url}"></audio></div>`;
+      } else if (isVideoMime(att.mime_type)) {
+        html += `<video controls preload="metadata" src="${url}" style="max-width:400px;max-height:300px;border-radius:4px;margin-top:0.3rem;"></video>`;
+      } else {
+        html += `<div class="attachment"><a href="${url}" download="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</a> <span class="file-size">${formatFileSize(att.size)}</span></div>`;
+      }
     }
   }
   html += '</div>';
   return html;
+}
+
+/** Fetch, decrypt, and render encrypted attachments that have placeholder elements in the DOM */
+export function decryptAndRenderAttachments(attachments) {
+  if (!attachments) return;
+  const encrypted = attachments.filter(a => a.encrypted);
+  if (encrypted.length === 0) return;
+
+  // Lazy imports to avoid circular dependencies
+  Promise.all([import('./crypto.js'), import('./transport.js')]).then(([{ decryptFile }, { apiFetch }]) => {
+    for (const att of encrypted) {
+      const el = document.getElementById('enc-att-' + att.id);
+      if (!el) continue;
+
+      const ch = att._channel || state.currentChannel;
+      const channelKey = state.channelKeys[ch];
+      if (!channelKey) {
+        if (el.tagName === 'IMG') el.alt = '[Encrypted - key unavailable]';
+        else if (el.tagName === 'A') el.textContent = '[Encrypted - key unavailable]';
+        continue;
+      }
+
+      apiFetch(att.url)
+        .then(r => r.arrayBuffer())
+        .then(buf => {
+          const decrypted = decryptFile(new Uint8Array(buf), channelKey);
+          if (!decrypted) {
+            if (el.tagName === 'IMG') el.alt = '[Decryption failed]';
+            else if (el.tagName === 'A') el.textContent = '[Decryption failed]';
+            return;
+          }
+          const blob = new Blob([decrypted], { type: att.mime_type });
+          const blobUrl = URL.createObjectURL(blob);
+          if (el.tagName === 'IMG') {
+            el.src = blobUrl;
+            const link = el.closest('a[data-enc-att]');
+            if (link) link.href = blobUrl;
+          } else if (el.tagName === 'AUDIO' || el.tagName === 'VIDEO') {
+            el.src = blobUrl;
+          } else if (el.tagName === 'A') {
+            el.href = blobUrl;
+            el.download = att.filename;
+          }
+        })
+        .catch(() => {
+          if (el.tagName === 'IMG') el.alt = '[Download failed]';
+          else if (el.tagName === 'A') el.textContent = '[Download failed]';
+        });
+    }
+  });
 }

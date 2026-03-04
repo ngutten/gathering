@@ -130,8 +130,37 @@ export function updateKeyUI() {
   if (fp) fp.textContent = getKeyFingerprint();
 }
 
+// Deny cooldown: suppress repeated key requests from the same user+channel
+const DENY_COOLDOWN_KEY = 'gathering_key_denials';
+const DEFAULT_DENY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 day
+
+function getDenials() {
+  try {
+    return JSON.parse(localStorage.getItem(DENY_COOLDOWN_KEY) || '{}');
+  } catch { return {}; }
+}
+
+function setDenial(channel, user) {
+  const denials = getDenials();
+  denials[`${channel}:${user}`] = Date.now();
+  localStorage.setItem(DENY_COOLDOWN_KEY, JSON.stringify(denials));
+}
+
+function isDenied(channel, user) {
+  const denials = getDenials();
+  const ts = denials[`${channel}:${user}`];
+  if (!ts) return false;
+  const cooldown = parseInt(localStorage.getItem('gathering_deny_cooldown_ms') || DEFAULT_DENY_COOLDOWN_MS, 10);
+  if (Date.now() - ts < cooldown) return true;
+  // Expired — clean up
+  delete denials[`${channel}:${user}`];
+  localStorage.setItem(DENY_COOLDOWN_KEY, JSON.stringify(denials));
+  return false;
+}
+
 export function showKeyApproval(channel, user, publicKey) {
   if (state.pendingKeyRequests.some(r => r.channel === channel && r.user === user)) return;
+  if (isDenied(channel, user)) return;
   state.pendingKeyRequests.push({ channel, user, publicKey });
   renderKeyRequests();
 }
@@ -155,7 +184,10 @@ export function denyKeyRequest(index) {
   const req = state.pendingKeyRequests[index];
   state.pendingKeyRequests.splice(index, 1);
   renderKeyRequests();
-  if (req) emit('system-message', `Denied ${req.user} access to #${req.channel}`);
+  if (req) {
+    setDenial(req.channel, req.user);
+    emit('system-message', `Denied ${req.user} access to #${req.channel} (suppressed for 24h)`);
+  }
 }
 
 export function renderKeyRequests() {
@@ -182,6 +214,34 @@ export function renderKeyRequests() {
       `</div></div>`
     ).join('') +
     '</div>';
+}
+
+export function encryptFile(arrayBuffer, channelKey) {
+  const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  const plainBytes = new Uint8Array(arrayBuffer);
+  const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    plainBytes, null, null, nonce, channelKey
+  );
+  const payload = new Uint8Array(1 + nonce.length + ciphertext.length);
+  payload[0] = 0x02; // file prefix (distinct from 0x01 message prefix)
+  payload.set(nonce, 1);
+  payload.set(ciphertext, 1 + nonce.length);
+  return payload;
+}
+
+export function decryptFile(uint8Array, channelKey) {
+  try {
+    if (uint8Array[0] !== 0x02) return null;
+    const nonceLen = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+    const nonce = uint8Array.slice(1, 1 + nonceLen);
+    const ciphertext = uint8Array.slice(1 + nonceLen);
+    const plainBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null, ciphertext, null, nonce, channelKey
+    );
+    return plainBytes.buffer;
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function triggerKeyRotation(channel, excludeUser) {

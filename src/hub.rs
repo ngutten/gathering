@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::db::Db;
-use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg, TopicSummary, TopicReplyData, SearchResult};
+use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg, TopicSummary, TopicReplyData};
 use std::path::PathBuf;
 
 /// A connected user's handle
@@ -113,8 +113,8 @@ impl Hub {
             }
         }
 
-        // Send channel list
-        let channels = self.channel_list_inner(&clients);
+        // Send channel list (filtered for this user)
+        let channels = self.channel_list_for_user(&clients, Some(&username));
         if let Some(client) = clients.get(&id) {
             let _ = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels });
         }
@@ -185,11 +185,36 @@ impl Hub {
             }
 
             ClientMsg::Send { channel, content, ttl_secs, attachments, encrypted } => {
+                // Input validation (S11)
+                if content.len() > 32 * 1024 {
+                    let clients = self.clients.lock().await;
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Message too long (max 32KB)"));
+                    }
+                    return;
+                }
+
                 let clients = self.clients.lock().await;
-                let username = match clients.get(&id) {
-                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                let (username, in_channel) = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
                     _ => return,
                 };
+
+                // Channel membership check (S7)
+                if !in_channel {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                    }
+                    return;
+                }
+
+                // Permission check (S8)
+                if !self.db.user_has_permission(&username, "send_message") {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied: send_message"));
+                    }
+                    return;
+                }
 
                 let expires_at = ttl_secs.map(|s| Utc::now() + Duration::seconds(s as i64));
 
@@ -220,6 +245,15 @@ impl Hub {
             }
 
             ClientMsg::Join { channel } => {
+                // Input validation (S11)
+                if channel.len() > 64 || (!Db::is_dm_channel(&channel) && !channel.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')) {
+                    let clients = self.clients.lock().await;
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Invalid channel name (max 64 chars, alphanumeric/_/- only)"));
+                    }
+                    return;
+                }
+
                 // DM channels: only members can join, no creation via Join
                 if Db::is_dm_channel(&channel) {
                     let clients = self.clients.lock().await;
@@ -230,6 +264,20 @@ impl Hub {
                     if !self.db.is_dm_member(&channel, &username) {
                         if let Some(client) = clients.get(&id) {
                             let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot join this DM channel"));
+                        }
+                        return;
+                    }
+                    drop(clients);
+                } else if self.db.channel_exists(&channel) {
+                    // Existing channel: check access for restricted channels
+                    let clients = self.clients.lock().await;
+                    let username = match clients.get(&id) {
+                        Some(c) if !c.username.is_empty() => c.username.clone(),
+                        _ => return,
+                    };
+                    if !self.db.can_access_channel(&channel, &username) {
+                        if let Some(client) = clients.get(&id) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted"));
                         }
                         return;
                     }
@@ -251,12 +299,24 @@ impl Hub {
                     drop(clients);
                 }
 
-                self.db.ensure_channel(&channel);
+                // Get username to record as creator if new channel
+                {
+                    let clients = self.clients.lock().await;
+                    let username = match clients.get(&id) {
+                        Some(c) if !c.username.is_empty() => c.username.clone(),
+                        _ => return,
+                    };
+                    if !self.db.channel_exists(&channel) {
+                        self.db.ensure_channel_with_creator(&channel, &username);
+                    } else {
+                        self.db.ensure_channel(&channel);
+                    }
+                }
                 let mut clients = self.clients.lock().await;
-                let username = match clients.get_mut(&id) {
+                let (username, already_joined) = match clients.get_mut(&id) {
                     Some(c) if !c.username.is_empty() => {
-                        c.channels.insert(channel.clone());
-                        c.username.clone()
+                        let was_new = c.channels.insert(channel.clone());
+                        (c.username.clone(), !was_new)
                     }
                     _ => return,
                 };
@@ -294,17 +354,17 @@ impl Hub {
                     }
                 }
 
-                // Notify channel
-                let join_msg = ServerMsg::UserJoined {
-                    channel: channel.clone(),
-                    username,
-                };
-                Self::broadcast_to_channel_inner(&clients, &channel, &join_msg, Some(id));
+                // Only broadcast join notification and update channel lists for new joins
+                if !already_joined {
+                    let join_msg = ServerMsg::UserJoined {
+                        channel: channel.clone(),
+                        username,
+                    };
+                    Self::broadcast_to_channel_inner(&clients, &channel, &join_msg, Some(id));
 
-                // Update channel list for everyone
-                let channels = self.channel_list_inner(&clients);
-                let list_msg = ServerMsg::ChannelList { channels };
-                Self::broadcast_all_inner(&clients, &list_msg, None);
+                    // Update channel list for everyone (per-user filtering)
+                    self.broadcast_channel_lists(&clients);
+                }
             }
 
             ClientMsg::Leave { channel } => {
@@ -325,7 +385,21 @@ impl Hub {
             }
 
             ClientMsg::History { channel, limit } => {
-                let history = self.db.get_history(&channel, limit.unwrap_or(100));
+                let clamped_limit = limit.unwrap_or(100).min(100); // S11: clamp
+                let clients = self.clients.lock().await;
+                let (_username, in_channel) = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
+                    _ => return,
+                };
+                // S7: membership check
+                if !in_channel {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                    }
+                    return;
+                }
+                drop(clients);
+                let history = self.db.get_history(&channel, clamped_limit);
                 let clients = self.clients.lock().await;
                 if let Some(client) = clients.get(&id) {
                     let _ = Self::send_to(
@@ -370,10 +444,8 @@ impl Hub {
 
                 self.db.create_channel_with_type(&channel, "voice");
 
-                // Update channel list for everyone
-                let channels = self.channel_list_inner(&clients);
-                let list_msg = ServerMsg::ChannelList { channels };
-                Self::broadcast_all_inner(&clients, &list_msg, None);
+                // Update channel list for everyone (per-user filtering)
+                self.broadcast_channel_lists(&clients);
             }
 
             ClientMsg::VoiceJoin { channel } => {
@@ -512,11 +584,43 @@ impl Hub {
             }
 
             ClientMsg::CreateTopic { channel, title, body, ttl_secs, attachments, encrypted } => {
+                // Input validation (S11)
+                if title.len() > 256 {
+                    let clients = self.clients.lock().await;
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Topic title too long (max 256 chars)"));
+                    }
+                    return;
+                }
+                if body.len() > 64 * 1024 {
+                    let clients = self.clients.lock().await;
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Topic body too long (max 64KB)"));
+                    }
+                    return;
+                }
+
                 let clients = self.clients.lock().await;
-                let username = match clients.get(&id) {
-                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                let (username, in_channel) = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
                     _ => return,
                 };
+
+                // S7: membership check
+                if !in_channel {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                    }
+                    return;
+                }
+
+                // S8: permission check
+                if !self.db.user_has_permission(&username, "create_topic") {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Permission denied: create_topic"));
+                    }
+                    return;
+                }
 
                 let topic_id = uuid::Uuid::new_v4().to_string();
                 let now = chrono::Utc::now();
@@ -548,7 +652,7 @@ impl Hub {
             }
 
             ClientMsg::ListTopics { channel, limit } => {
-                let topics = self.db.list_topics(&channel, limit.unwrap_or(50));
+                let topics = self.db.list_topics(&channel, limit.unwrap_or(50).min(50));
                 let clients = self.clients.lock().await;
                 if let Some(client) = clients.get(&id) {
                     let _ = Self::send_to(&client.tx, &ServerMsg::TopicList { channel, topics });
@@ -959,9 +1063,8 @@ impl Hub {
                         Self::broadcast_all_inner(&clients, &ServerMsg::ChannelDeleted {
                             channel: channel.clone(),
                         }, None);
-                        // Broadcast updated channel list
-                        let ch_list = self.channel_list_inner(&clients);
-                        Self::broadcast_all_inner(&clients, &ServerMsg::ChannelList { channels: ch_list }, None);
+                        // Broadcast updated channel list (per-user filtering)
+                        self.broadcast_channel_lists(&clients);
                     }
                     Err(e) => {
                         if let Some(client) = clients.get(&id) {
@@ -1242,6 +1345,133 @@ impl Hub {
                 }
             }
 
+            // ── Channel Access Control ─────────────────────────────
+
+            ClientMsg::SetChannelRestricted { channel, restricted } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                // Only channel creator or admin can change restriction
+                let is_creator = self.db.get_channel_creator(&channel).as_deref() == Some(&username);
+                let is_admin = self.db.user_has_permission(&username, "manage_settings");
+                if !is_creator && !is_admin {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can change channel restrictions"));
+                    }
+                    return;
+                }
+
+                self.db.set_channel_restricted(&channel, restricted);
+                if restricted {
+                    // When restricting, auto-add all currently joined users as members
+                    for client in clients.values() {
+                        if client.channels.contains(&channel) && !client.username.is_empty() {
+                            self.db.add_channel_member(&channel, &client.username);
+                        }
+                    }
+                    // Also add the creator
+                    self.db.add_channel_member(&channel, &username);
+                }
+
+                // Broadcast restriction change to channel members
+                Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelRestricted {
+                    channel: channel.clone(),
+                    restricted,
+                }, None);
+
+                // Update channel lists for everyone (restricted channels may appear/disappear)
+                self.broadcast_channel_lists(&clients);
+            }
+
+            ClientMsg::AddChannelMember { channel, username: target_user } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                let is_creator = self.db.get_channel_creator(&channel).as_deref() == Some(&username);
+                let is_admin = self.db.user_has_permission(&username, "manage_settings");
+                if !is_creator && !is_admin {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can manage members"));
+                    }
+                    return;
+                }
+
+                self.db.add_channel_member(&channel, &target_user);
+
+                // Notify channel members
+                Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelMemberAdded {
+                    channel: channel.clone(),
+                    username: target_user.clone(),
+                }, None);
+
+                // Update channel lists so the new member can see the channel
+                self.broadcast_channel_lists(&clients);
+            }
+
+            ClientMsg::RemoveChannelMember { channel, username: target_user } => {
+                let mut clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                let is_creator = self.db.get_channel_creator(&channel).as_deref() == Some(&username);
+                let is_admin = self.db.user_has_permission(&username, "manage_settings");
+                if !is_creator && !is_admin {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can manage members"));
+                    }
+                    return;
+                }
+
+                self.db.remove_channel_member(&channel, &target_user);
+
+                // Remove target from channel in their session
+                for client in clients.values_mut() {
+                    if client.username == target_user {
+                        client.channels.remove(&channel);
+                    }
+                }
+
+                // Notify channel members
+                Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelMemberRemoved {
+                    channel: channel.clone(),
+                    username: target_user.clone(),
+                }, None);
+
+                // Update channel lists
+                self.broadcast_channel_lists(&clients);
+            }
+
+            ClientMsg::GetChannelMembers { channel } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                if !self.db.can_access_channel(&channel, &username) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied"));
+                    }
+                    return;
+                }
+
+                let members = self.db.get_channel_members(&channel);
+                let restricted = self.db.is_channel_restricted(&channel);
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::ChannelMemberList {
+                        channel, members, restricted,
+                    });
+                }
+            }
+
             // ── E2E Encryption ─────────────────────────────────────
 
             ClientMsg::UploadPublicKey { public_key } => {
@@ -1280,9 +1510,8 @@ impl Hub {
                     channel: channel.clone(),
                 }, None);
 
-                // Update channel list for everyone
-                let ch_list = self.channel_list_inner(&clients);
-                Self::broadcast_all_inner(&clients, &ServerMsg::ChannelList { channels: ch_list }, None);
+                // Update channel list for everyone (per-user filtering)
+                self.broadcast_channel_lists(&clients);
             }
 
             ClientMsg::RequestChannelKey { channel } => {
@@ -1312,10 +1541,19 @@ impl Hub {
 
             ClientMsg::ProvideChannelKey { channel, target_user, encrypted_key } => {
                 let clients = self.clients.lock().await;
-                let _username = match clients.get(&id) {
-                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                let (username, in_channel) = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
                     _ => return,
                 };
+
+                // S10: verify sender is a member of the channel
+                if !in_channel {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                    }
+                    return;
+                }
+                let _ = username;
 
                 let key_version = self.db.get_channel_key_version(&channel);
                 self.db.store_channel_key(&channel, &target_user, &encrypted_key, key_version);
@@ -1610,6 +1848,15 @@ impl Hub {
         }
     }
 
+    /// Broadcast per-user filtered channel lists to all authenticated clients
+    fn broadcast_channel_lists(&self, clients: &HashMap<usize, Client>) {
+        for (_, client) in clients {
+            if client.username.is_empty() { continue; }
+            let channels = self.channel_list_for_user(clients, Some(&client.username));
+            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels });
+        }
+    }
+
     fn broadcast_all_inner(
         clients: &HashMap<usize, Client>,
         msg: &ServerMsg,
@@ -1639,18 +1886,28 @@ impl Hub {
         users
     }
 
-    fn channel_list_inner(&self, clients: &HashMap<usize, Client>) -> Vec<ChannelInfo> {
+    fn channel_list_for_user(&self, clients: &HashMap<usize, Client>, username: Option<&str>) -> Vec<ChannelInfo> {
         let db_channels = self.db.list_channels_with_type();
         db_channels
             .into_iter()
             .filter(|(name, _)| !Db::is_dm_channel(name))
+            .filter(|(name, _)| {
+                // Filter out restricted channels the user can't access
+                if let Some(user) = username {
+                    self.db.can_access_channel(name, user)
+                } else {
+                    // If no username provided (broadcast), include all
+                    true
+                }
+            })
             .map(|(name, channel_type)| {
                 let user_count = clients
                     .values()
                     .filter(|c| c.channels.contains(&name))
                     .count();
                 let encrypted = self.db.is_channel_encrypted(&name);
-                ChannelInfo { name, user_count, encrypted, channel_type }
+                let restricted = self.db.is_channel_restricted(&name);
+                ChannelInfo { name, user_count, encrypted, channel_type, restricted }
             })
             .collect()
     }

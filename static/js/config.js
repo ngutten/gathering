@@ -13,6 +13,17 @@ export function apiUrl(path) {
   return getServerBase() + path;
 }
 
+export function fileUrl(path) {
+  const base = getServerBase() + path;
+  // Append auth token for authenticated file downloads
+  const token = localStorage.getItem('gathering_token');
+  if (token) {
+    const sep = base.includes('?') ? '&' : '?';
+    return base + sep + 'token=' + encodeURIComponent(token);
+  }
+  return base;
+}
+
 export function wsUrl() {
   const base = getServerBase();
   if (base) {

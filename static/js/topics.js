@@ -3,7 +3,7 @@
 import state from './state.js';
 import { send, apiFetch } from './transport.js';
 import { encryptMessage, decryptMessage } from './crypto.js';
-import { escapeHtml, renderRichContent, formatFileSize, formatTimeAgo, renderTtlBadge, renderAttachmentsHtml, isImageMime, isAudioMime, isVideoMime } from './render.js';
+import { escapeHtml, renderRichContent, formatFileSize, formatTimeAgo, renderTtlBadge, renderAttachmentsHtml, decryptAndRenderAttachments, isImageMime, isAudioMime, isVideoMime } from './render.js';
 
 export function switchView(view) {
   state.currentView = view;
@@ -146,6 +146,7 @@ export function renderThread(topic, replies) {
   bodyEl.setAttribute('data-topic-title', displayTitle);
   bodyEl.setAttribute('data-topic-encrypted', topic.encrypted ? '1' : '0');
   bodyEl.innerHTML = `<div class="meta"><span class="author">${escapeHtml(topic.author)}</span> <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}</div><div class="body">${renderRichContent(displayBody)}</div>${renderAttachmentsHtml(topic.attachments)}`;
+  decryptAndRenderAttachments(topic.attachments);
   const repliesEl = document.getElementById('thread-replies');
   repliesEl.innerHTML = '';
   replies.forEach(r => appendTopicReply(r));
@@ -189,6 +190,7 @@ export function appendTopicReply(reply) {
   div.innerHTML = `${actionsHtml}<div class="meta"><span class="author">${escapeHtml(reply.author)}</span> <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}</div><div class="body">${renderRichContent(displayContent)}</div>${renderAttachmentsHtml(reply.attachments)}`;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
+  decryptAndRenderAttachments(reply.attachments);
 }
 
 export function startEditTopic() {

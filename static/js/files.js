@@ -1,7 +1,7 @@
 // files.js — File manager overlay panel
 
 import state from './state.js';
-import { send } from './transport.js';
+import { send, apiFetch } from './transport.js';
 import { escapeHtml, formatFileSize } from './render.js';
 
 let fileManagerOpen = false;
@@ -68,13 +68,16 @@ function renderFileManager() {
       const pinnedClass = f.pinned ? 'pinned' : '';
       const pinnedLabel = f.pinned ? 'Unpin' : 'Pin';
       const pinnedIcon = f.pinned ? '&#x1F4CC;' : '';
+      const encIcon = f.encrypted ? ' &#x1F512;' : '';
       const date = new Date(f.created_at).toLocaleDateString();
+      const downloadBtn = `<button onclick="downloadFile('${f.id}')">Download</button>`;
       return `<div class="file-item ${pinnedClass}">
         <div class="file-info">
-          <div class="file-name-row">${pinnedIcon} ${escapeHtml(f.filename)}</div>
+          <div class="file-name-row">${pinnedIcon}${encIcon} ${escapeHtml(f.filename)}</div>
           <div class="file-details">${formatFileSize(f.size)} &middot; #${escapeHtml(f.channel)} &middot; ${date}</div>
         </div>
         <div class="file-actions">
+          ${downloadBtn}
           <button onclick="toggleFilePin('${f.id}', ${!f.pinned})">${pinnedLabel}</button>
           <button class="del-btn" onclick="deleteUserFile('${f.id}')">Delete</button>
         </div>
@@ -87,6 +90,42 @@ function renderFileManager() {
 
 export function toggleFilePin(fileId, pinned) {
   send('SetFilePinned', { file_id: fileId, pinned });
+}
+
+export async function downloadFile(fileId) {
+  const f = currentFiles.find(x => x.id === fileId);
+  if (!f) return;
+
+  try {
+    const res = await apiFetch(`/api/files/${fileId}`);
+    const buf = await res.arrayBuffer();
+
+    let blob;
+    if (f.encrypted) {
+      const channelKey = state.channelKeys[f.channel];
+      if (!channelKey) {
+        alert('Cannot decrypt: channel key unavailable for #' + f.channel);
+        return;
+      }
+      const { decryptFile } = await import('./crypto.js');
+      const decrypted = decryptFile(new Uint8Array(buf), channelKey);
+      if (!decrypted) {
+        alert('Decryption failed');
+        return;
+      }
+      blob = new Blob([decrypted], { type: f.mime_type });
+    } else {
+      blob = new Blob([buf], { type: f.mime_type });
+    }
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = f.filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    alert('Download failed: ' + e.message);
+  }
 }
 
 export function deleteUserFile(fileId) {
