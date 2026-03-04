@@ -2,11 +2,12 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_ha
 use chrono::{DateTime, Utc};
 use rand::rngs::OsRng;
 use rusqlite::{Connection, params};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-use crate::protocol::HistoryMessage;
+use crate::protocol::{FileInfo, HistoryMessage, InviteInfo, RoleInfo, TopicDetailData, TopicReplyData, TopicSummary};
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -43,7 +44,18 @@ impl Db {
                 author TEXT NOT NULL REFERENCES users(username),
                 content TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
-                expires_at TEXT
+                expires_at TEXT,
+                attachments TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS files (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mime_type TEXT NOT NULL,
+                uploader TEXT NOT NULL REFERENCES users(username),
+                channel TEXT NOT NULL REFERENCES channels(name),
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_channel_time
@@ -51,9 +63,121 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_messages_expires
                 ON messages(expires_at) WHERE expires_at IS NOT NULL;
 
+            CREATE TABLE IF NOT EXISTS topics (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                author TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                attachments TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS topic_replies (
+                id TEXT PRIMARY KEY,
+                topic_id TEXT NOT NULL REFERENCES topics(id),
+                author TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                attachments TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_topics_channel
+                ON topics(channel, pinned DESC, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_topic_replies_topic
+                ON topic_replies(topic_id, created_at ASC);
+
+            -- Roles & permissions
+            CREATE TABLE IF NOT EXISTS roles (
+                name TEXT PRIMARY KEY,
+                permissions TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE IF NOT EXISTS user_roles (
+                username TEXT NOT NULL REFERENCES users(username),
+                role_name TEXT NOT NULL REFERENCES roles(name),
+                PRIMARY KEY (username, role_name)
+            );
+
+            -- Server settings
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            -- Invite codes
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code TEXT PRIMARY KEY,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                used_by TEXT,
+                used_at TEXT
+            );
+
+            INSERT OR IGNORE INTO settings(key, value) VALUES ('registration_mode', 'open');
+            INSERT OR IGNORE INTO settings(key, value) VALUES ('channel_creation', 'all');
+
             -- Ensure 'general' channel exists
             INSERT OR IGNORE INTO channels(name) VALUES ('general');",
         )?;
+
+        // Add attachments column if missing (migration for existing DBs)
+        let has_attachments: bool = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .map(|sql| sql.contains("attachments"))
+            .unwrap_or(false);
+        if !has_attachments {
+            conn.execute_batch("ALTER TABLE messages ADD COLUMN attachments TEXT;")?;
+        }
+
+        // Add expires_at/attachments columns to topics/topic_replies if missing
+        let topics_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='topics'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !topics_sql.is_empty() && !topics_sql.contains("expires_at") {
+            let _ = conn.execute_batch(
+                "ALTER TABLE topics ADD COLUMN expires_at TEXT;
+                 ALTER TABLE topics ADD COLUMN attachments TEXT;"
+            );
+        }
+        let replies_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='topic_replies'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !replies_sql.is_empty() && !replies_sql.contains("expires_at") {
+            let _ = conn.execute_batch(
+                "ALTER TABLE topic_replies ADD COLUMN expires_at TEXT;
+                 ALTER TABLE topic_replies ADD COLUMN attachments TEXT;"
+            );
+        }
+
+        // Add edited_at column to messages, topics, topic_replies if missing
+        let msg_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !msg_sql.is_empty() && !msg_sql.contains("edited_at") {
+            let _ = conn.execute_batch("ALTER TABLE messages ADD COLUMN edited_at TEXT;");
+        }
+        // Re-read topics_sql after possible prior migration
+        let topics_sql2: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='topics'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !topics_sql2.is_empty() && !topics_sql2.contains("edited_at") {
+            let _ = conn.execute_batch("ALTER TABLE topics ADD COLUMN edited_at TEXT;");
+        }
+        let replies_sql2: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='topic_replies'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !replies_sql2.is_empty() && !replies_sql2.contains("edited_at") {
+            let _ = conn.execute_batch("ALTER TABLE topic_replies ADD COLUMN edited_at TEXT;");
+        }
 
         Ok(Db { conn: Mutex::new(conn) })
     }
@@ -137,6 +261,15 @@ impl Db {
         );
     }
 
+    pub fn channel_exists(&self, name: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM channels WHERE name = ?1",
+            params![name],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false)
+    }
+
     pub fn list_channels(&self) -> Vec<String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -146,6 +279,34 @@ impl Db {
             .unwrap()
             .filter_map(|r| r.ok())
             .collect()
+    }
+
+    pub fn delete_channel(&self, name: &str) -> Result<(), String> {
+        if name == "general" {
+            return Err("Cannot delete the general channel".into());
+        }
+        let conn = self.conn.lock().unwrap();
+        // Delete replies for topics in this channel
+        conn.execute(
+            "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE channel = ?1)",
+            params![name],
+        ).map_err(|e| e.to_string())?;
+        // Delete topics
+        conn.execute("DELETE FROM topics WHERE channel = ?1", params![name])
+            .map_err(|e| e.to_string())?;
+        // Delete messages
+        conn.execute("DELETE FROM messages WHERE channel = ?1", params![name])
+            .map_err(|e| e.to_string())?;
+        // Delete files
+        conn.execute("DELETE FROM files WHERE channel = ?1", params![name])
+            .map_err(|e| e.to_string())?;
+        // Delete channel
+        let rows = conn.execute("DELETE FROM channels WHERE name = ?1", params![name])
+            .map_err(|e| e.to_string())?;
+        if rows == 0 {
+            return Err("Channel not found".into());
+        }
+        Ok(())
     }
 
     // ── Messages ────────────────────────────────────────────────────
@@ -158,14 +319,16 @@ impl Db {
         content: &str,
         timestamp: &DateTime<Utc>,
         expires_at: Option<&DateTime<Utc>>,
+        attachments: Option<&Vec<String>>,
     ) {
         let conn = self.conn.lock().unwrap();
         let ts = timestamp.to_rfc3339();
         let exp = expires_at.map(|e| e.to_rfc3339());
+        let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
         let _ = conn.execute(
-            "INSERT INTO messages (id, channel, author, content, timestamp, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, channel, author, content, ts, exp],
+            "INSERT INTO messages (id, channel, author, content, timestamp, expires_at, attachments)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, channel, author, content, ts, exp, att_json],
         );
     }
 
@@ -175,7 +338,7 @@ impl Db {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, author, content, timestamp, expires_at FROM messages
+                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at FROM messages
                  WHERE channel = ?1
                    AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY timestamp DESC LIMIT ?3",
@@ -186,34 +349,579 @@ impl Db {
             .query_map(params![channel, now, limit], |row| {
                 let ts_str: String = row.get(3)?;
                 let exp_str: Option<String> = row.get(4)?;
-                Ok(HistoryMessage {
-                    id: row.get(0)?,
-                    author: row.get(1)?,
-                    content: row.get(2)?,
-                    timestamp: DateTime::parse_from_rfc3339(&ts_str)
-                        .unwrap_or_default()
-                        .with_timezone(&Utc),
-                    expires_at: exp_str.and_then(|s| {
-                        DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
-                    }),
-                })
+                let att_str: Option<String> = row.get(5)?;
+                let edited_str: Option<String> = row.get(6)?;
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, ts_str, exp_str, att_str, edited_str))
             })
             .unwrap()
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>();
 
+        // Resolve file IDs to FileInfo
+        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str)| {
+            let attachments = att_str
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|fid| self.get_file_inner(&conn, fid))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty());
+
+            let edited_at = edited_str.and_then(|s| {
+                DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
+            });
+
+            HistoryMessage {
+                id,
+                author,
+                content,
+                timestamp: DateTime::parse_from_rfc3339(&ts_str)
+                    .unwrap_or_default()
+                    .with_timezone(&Utc),
+                expires_at: exp_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
+                }),
+                attachments,
+                edited_at,
+            }
+        }).collect();
+
         // Return in chronological order
-        rows.into_iter().rev().collect()
+        messages.reverse();
+        messages
     }
 
-    /// Delete expired messages. Returns count deleted.
+    /// Delete expired messages, topics, and topic replies. Returns count deleted.
     pub fn purge_expired(&self) -> usize {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
-        conn.execute(
+        let msgs = conn.execute(
             "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?1",
             params![now],
+        ).unwrap_or(0);
+        // Delete replies of expired topics, then the topics themselves
+        let _ = conn.execute(
+            "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE expires_at IS NOT NULL AND expires_at <= ?1)",
+            params![now],
+        );
+        let topics = conn.execute(
+            "DELETE FROM topics WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+            params![now],
+        ).unwrap_or(0);
+        let replies = conn.execute(
+            "DELETE FROM topic_replies WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+            params![now],
+        ).unwrap_or(0);
+        msgs + topics + replies
+    }
+
+    // ── Edit/Delete messages ────────────────────────────────────────
+
+    /// Returns (channel, author) on success
+    pub fn get_message_info(&self, id: &str) -> Option<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT author, channel FROM messages WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get::<_, String>(1)?, row.get::<_, String>(0)?)),
+        ).ok()
+    }
+
+    /// Edit a message's content. Returns (channel, author).
+    pub fn edit_message(&self, id: &str, content: &str) -> Result<(String, String), String> {
+        let conn = self.conn.lock().unwrap();
+        let (channel, author): (String, String) = conn.query_row(
+            "SELECT channel, author FROM messages WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| "Message not found".to_string())?;
+
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE messages SET content = ?2, edited_at = ?3 WHERE id = ?1",
+            params![id, content, now],
+        ).map_err(|e| e.to_string())?;
+        Ok((channel, author))
+    }
+
+    /// Delete a message. Returns (channel, author).
+    pub fn delete_message(&self, id: &str) -> Result<(String, String), String> {
+        let conn = self.conn.lock().unwrap();
+        let (channel, author): (String, String) = conn.query_row(
+            "SELECT channel, author FROM messages WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| "Message not found".to_string())?;
+
+        conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok((channel, author))
+    }
+
+    // ── Edit/Delete topics ──────────────────────────────────────────
+
+    pub fn get_topic_author(&self, id: &str) -> Option<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT author, channel FROM topics WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).ok()
+    }
+
+    pub fn edit_topic(&self, id: &str, title: Option<&str>, body: Option<&str>) -> Result<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let channel: String = conn.query_row(
+            "SELECT channel FROM topics WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).map_err(|_| "Topic not found".to_string())?;
+
+        let now = Utc::now().to_rfc3339();
+        if let Some(t) = title {
+            conn.execute("UPDATE topics SET title = ?2 WHERE id = ?1", params![id, t])
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(b) = body {
+            conn.execute("UPDATE topics SET body = ?2 WHERE id = ?1", params![id, b])
+                .map_err(|e| e.to_string())?;
+        }
+        conn.execute("UPDATE topics SET edited_at = ?2 WHERE id = ?1", params![id, now])
+            .map_err(|e| e.to_string())?;
+        Ok(channel)
+    }
+
+    pub fn delete_topic(&self, id: &str) -> Result<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let channel: String = conn.query_row(
+            "SELECT channel FROM topics WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).map_err(|_| "Topic not found".to_string())?;
+
+        // Cascade delete replies
+        conn.execute("DELETE FROM topic_replies WHERE topic_id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM topics WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(channel)
+    }
+
+    // ── Edit/Delete topic replies ───────────────────────────────────
+
+    pub fn get_reply_author(&self, id: &str) -> Option<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT author, topic_id FROM topic_replies WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).ok()
+    }
+
+    pub fn edit_topic_reply(&self, id: &str, content: &str) -> Result<(String, String), String> {
+        let conn = self.conn.lock().unwrap();
+        let (topic_id, author): (String, String) = conn.query_row(
+            "SELECT topic_id, author FROM topic_replies WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| "Reply not found".to_string())?;
+
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE topic_replies SET content = ?2, edited_at = ?3 WHERE id = ?1",
+            params![id, content, now],
+        ).map_err(|e| e.to_string())?;
+        Ok((topic_id, author))
+    }
+
+    pub fn delete_topic_reply(&self, id: &str) -> Result<(String, String), String> {
+        let conn = self.conn.lock().unwrap();
+        let (topic_id, author): (String, String) = conn.query_row(
+            "SELECT topic_id, author FROM topic_replies WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| "Reply not found".to_string())?;
+
+        conn.execute("DELETE FROM topic_replies WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok((topic_id, author))
+    }
+
+    // ── Files ───────────────────────────────────────────────────────
+
+    pub fn store_file(
+        &self,
+        id: &str,
+        filename: &str,
+        size: i64,
+        mime_type: &str,
+        uploader: &str,
+        channel: &str,
+    ) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO files (id, filename, size, mime_type, uploader, channel)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, filename, size, mime_type, uploader, channel],
+        );
+    }
+
+    pub fn get_file(&self, id: &str) -> Option<FileInfo> {
+        let conn = self.conn.lock().unwrap();
+        self.get_file_inner(&conn, id)
+    }
+
+    // ── Topics ────────────────────────────────────────────────────
+
+    pub fn create_topic(
+        &self, id: &str, channel: &str, title: &str, body: &str, author: &str,
+        expires_at: Option<&str>, attachments: Option<&Vec<String>>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
+        conn.execute(
+            "INSERT INTO topics (id, channel, title, body, author, created_at, expires_at, attachments)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, channel, title, body, author, now, expires_at, att_json],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_topics(&self, channel: &str, limit: u32) -> Vec<TopicSummary> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.channel, t.title, t.author, t.created_at, t.pinned,
+                    COUNT(r.id) as reply_count,
+                    COALESCE(MAX(r.created_at), t.created_at) as last_activity,
+                    t.expires_at
+             FROM topics t
+             LEFT JOIN topic_replies r ON r.topic_id = t.id
+             WHERE t.channel = ?1
+               AND (t.expires_at IS NULL OR t.expires_at > ?2)
+             GROUP BY t.id
+             ORDER BY t.pinned DESC, last_activity DESC
+             LIMIT ?3"
+        ).unwrap();
+        stmt.query_map(params![channel, now, limit], |row| {
+            Ok(TopicSummary {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                title: row.get(2)?,
+                author: row.get(3)?,
+                created_at: row.get(4)?,
+                pinned: row.get::<_, i32>(5)? != 0,
+                reply_count: row.get::<_, u32>(6)?,
+                last_activity: row.get(7)?,
+                expires_at: row.get(8)?,
+            })
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn get_topic(&self, topic_id: &str) -> Option<TopicDetailData> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, channel, title, body, author, created_at, pinned, expires_at, attachments, edited_at FROM topics WHERE id = ?1",
+            params![topic_id],
+            |row| {
+                let att_str: Option<String> = row.get(8)?;
+                let attachments = att_str
+                    .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                    .map(|ids| ids.iter().filter_map(|fid| self.get_file_inner(&conn, fid)).collect::<Vec<_>>())
+                    .filter(|v| !v.is_empty());
+                Ok(TopicDetailData {
+                    id: row.get(0)?,
+                    channel: row.get(1)?,
+                    title: row.get(2)?,
+                    body: row.get(3)?,
+                    author: row.get(4)?,
+                    created_at: row.get(5)?,
+                    pinned: row.get::<_, i32>(6)? != 0,
+                    expires_at: row.get(7)?,
+                    attachments,
+                    edited_at: row.get(9)?,
+                })
+            },
+        ).ok()
+    }
+
+    pub fn get_topic_replies(&self, topic_id: &str, limit: u32) -> Vec<TopicReplyData> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic_id, author, content, created_at, expires_at, attachments, edited_at FROM topic_replies
+             WHERE topic_id = ?1
+               AND (expires_at IS NULL OR expires_at > ?2)
+             ORDER BY created_at ASC LIMIT ?3"
+        ).unwrap();
+        stmt.query_map(params![topic_id, now, limit], |row| {
+            let att_str: Option<String> = row.get(6)?;
+            let attachments = att_str
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .map(|ids| ids.iter().filter_map(|fid| self.get_file_inner(&conn, fid)).collect::<Vec<_>>())
+                .filter(|v| !v.is_empty());
+            Ok(TopicReplyData {
+                id: row.get(0)?,
+                topic_id: row.get(1)?,
+                author: row.get(2)?,
+                content: row.get(3)?,
+                created_at: row.get(4)?,
+                expires_at: row.get(5)?,
+                attachments,
+                edited_at: row.get(7)?,
+            })
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn create_topic_reply(
+        &self, id: &str, topic_id: &str, author: &str, content: &str,
+        expires_at: Option<&str>, attachments: Option<&Vec<String>>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        // Verify topic exists
+        let exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM topics WHERE id = ?1",
+            params![topic_id],
+            |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        if !exists {
+            return Err("Topic not found".into());
+        }
+        let now = Utc::now().to_rfc3339();
+        let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
+        conn.execute(
+            "INSERT INTO topic_replies (id, topic_id, author, content, created_at, expires_at, attachments)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, topic_id, author, content, now, expires_at, att_json],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn pin_topic(&self, topic_id: &str, pinned: bool) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE topics SET pinned = ?2 WHERE id = ?1",
+            params![topic_id, pinned as i32],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 {
+            return Err("Topic not found".into());
+        }
+        Ok(())
+    }
+
+    // ── Roles & Permissions ─────────────────────────────────────────
+
+    pub fn upsert_role(&self, name: &str, permissions: &[String]) {
+        let conn = self.conn.lock().unwrap();
+        let perms_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".to_string());
+        let _ = conn.execute(
+            "INSERT INTO roles(name, permissions) VALUES(?1, ?2)
+             ON CONFLICT(name) DO UPDATE SET permissions = ?2",
+            params![name, perms_json],
+        );
+    }
+
+    pub fn delete_role(&self, name: &str) -> Result<(), String> {
+        if name == "user" || name == "admin" {
+            return Err("Cannot delete built-in roles".into());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM user_roles WHERE role_name = ?1", params![name])
+            .map_err(|e| e.to_string())?;
+        let rows = conn.execute("DELETE FROM roles WHERE name = ?1", params![name])
+            .map_err(|e| e.to_string())?;
+        if rows == 0 {
+            return Err("Role not found".into());
+        }
+        Ok(())
+    }
+
+    pub fn list_roles(&self) -> Vec<RoleInfo> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT name, permissions FROM roles ORDER BY name").unwrap();
+        stmt.query_map([], |row| {
+            let perms_json: String = row.get(1)?;
+            let permissions: Vec<String> = serde_json::from_str(&perms_json).unwrap_or_default();
+            Ok(RoleInfo {
+                name: row.get(0)?,
+                permissions,
+            })
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    /// Assign the "user" role to all existing users who have no roles at all.
+    pub fn backfill_user_roles(&self) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO user_roles(username, role_name)
+             SELECT u.username, 'user' FROM users u
+             WHERE NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.username = u.username)",
+            [],
+        );
+    }
+
+    pub fn assign_role(&self, username: &str, role: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO user_roles(username, role_name) VALUES(?1, ?2)",
+            params![username, role],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn remove_role(&self, username: &str, role: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM user_roles WHERE username = ?1 AND role_name = ?2",
+            params![username, role],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_user_roles(&self, username: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT role_name FROM user_roles WHERE username = ?1 ORDER BY role_name"
+        ).unwrap();
+        stmt.query_map(params![username], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    pub fn get_user_permissions(&self, username: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT r.permissions FROM roles r
+             INNER JOIN user_roles ur ON ur.role_name = r.name
+             WHERE ur.username = ?1"
+        ).unwrap();
+        let mut all_perms: Vec<String> = Vec::new();
+        let rows: Vec<String> = stmt.query_map(params![username], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for perms_json in rows {
+            if let Ok(perms) = serde_json::from_str::<Vec<String>>(&perms_json) {
+                all_perms.extend(perms);
+            }
+        }
+        all_perms.sort();
+        all_perms.dedup();
+        all_perms
+    }
+
+    pub fn user_has_permission(&self, username: &str, perm: &str) -> bool {
+        let perms = self.get_user_permissions(username);
+        perms.contains(&"*".to_string()) || perms.contains(&perm.to_string())
+    }
+
+    // ── Settings ────────────────────────────────────────────────────
+
+    pub fn get_settings(&self) -> HashMap<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value FROM settings").unwrap();
+        let mut map = HashMap::new();
+        let rows: Vec<(String, String)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+        for (k, v) in rows {
+            map.insert(k, v);
+        }
+        map
+    }
+
+    pub fn get_setting(&self, key: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        ).ok()
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES(?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = ?2",
+            params![key, value],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // ── Invite codes ────────────────────────────────────────────────
+
+    pub fn create_invite(&self, created_by: &str) -> String {
+        let code = Uuid::new_v4().to_string()[..8].to_string();
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let _ = conn.execute(
+            "INSERT INTO invite_codes(code, created_by, created_at) VALUES(?1, ?2, ?3)",
+            params![code, created_by, now],
+        );
+        code
+    }
+
+    pub fn list_invites(&self) -> Vec<InviteInfo> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT code, created_by, created_at, used_by, used_at FROM invite_codes ORDER BY created_at DESC"
+        ).unwrap();
+        stmt.query_map([], |row| {
+            Ok(InviteInfo {
+                code: row.get(0)?,
+                created_by: row.get(1)?,
+                created_at: row.get(2)?,
+                used_by: row.get(3)?,
+                used_at: row.get(4)?,
+            })
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn validate_invite(&self, code: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let used: Option<String> = conn.query_row(
+            "SELECT used_by FROM invite_codes WHERE code = ?1",
+            params![code],
+            |row| row.get(0),
+        ).map_err(|_| "Invalid invite code".to_string())?;
+
+        if used.is_some() {
+            return Err("Invite code already used".into());
+        }
+        Ok(())
+    }
+
+    pub fn use_invite(&self, code: &str, username: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE invite_codes SET used_by = ?2, used_at = ?3 WHERE code = ?1 AND used_by IS NULL",
+            params![code, username, now],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // ── Private helpers ─────────────────────────────────────────────
+
+    fn get_file_inner(&self, conn: &Connection, id: &str) -> Option<FileInfo> {
+        conn.query_row(
+            "SELECT id, filename, size, mime_type FROM files WHERE id = ?1",
+            params![id],
+            |row| {
+                let file_id: String = row.get(0)?;
+                Ok(FileInfo {
+                    url: format!("/api/files/{}", file_id),
+                    id: file_id,
+                    filename: row.get(1)?,
+                    size: row.get(2)?,
+                    mime_type: row.get(3)?,
+                })
+            },
         )
-        .unwrap_or(0)
+        .ok()
     }
 }
