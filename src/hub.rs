@@ -144,7 +144,7 @@ impl Hub {
                 }
             }
 
-            ClientMsg::Send { channel, content, ttl_secs, attachments } => {
+            ClientMsg::Send { channel, content, ttl_secs, attachments, encrypted } => {
                 let clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
                     Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -160,7 +160,7 @@ impl Hub {
                         .collect::<Vec<_>>()
                 }).filter(|v| !v.is_empty());
 
-                let msg = ServerMsg::message(&channel, &username, &content, expires_at, file_infos);
+                let msg = ServerMsg::message(&channel, &username, &content, expires_at, file_infos, encrypted);
 
                 // Store in database
                 if let ServerMsg::Message {
@@ -171,6 +171,7 @@ impl Hub {
                         id, &channel, &username, &content,
                         timestamp, expires_at.as_ref(),
                         attachments.as_ref(),
+                        encrypted,
                     );
                 }
 
@@ -216,6 +217,27 @@ impl Hub {
                             messages: history,
                         },
                     );
+                }
+
+                // If channel is encrypted, deliver channel key or request it
+                if self.db.is_channel_encrypted(&channel) {
+                    if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&channel, &username) {
+                        if let Some(client) = clients.get(&id) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                                channel: channel.clone(),
+                                encrypted_key,
+                                key_version,
+                            });
+                        }
+                    } else if let Some(pub_key) = self.db.get_public_key(&username) {
+                        // Broadcast key request to online channel members
+                        let req_msg = ServerMsg::ChannelKeyRequest {
+                            channel: channel.clone(),
+                            requesting_user: username.clone(),
+                            public_key: pub_key,
+                        };
+                        Self::broadcast_to_channel_inner(&clients, &channel, &req_msg, Some(id));
+                    }
                 }
 
                 // Notify channel
@@ -1075,6 +1097,117 @@ impl Hub {
                     let _ = Self::send_to(&client.tx, &ServerMsg::UserRoles { username: target_user, roles });
                 }
             }
+
+            // ── E2E Encryption ─────────────────────────────────────
+
+            ClientMsg::UploadPublicKey { public_key } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                self.db.store_public_key(&username, &public_key);
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::PublicKeyStored { username });
+                }
+            }
+
+            ClientMsg::GetPublicKeys { usernames } => {
+                let keys = self.db.get_public_keys(&usernames);
+                let clients = self.clients.lock().await;
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::PublicKeys { keys });
+                }
+            }
+
+            ClientMsg::CreateEncryptedChannel { channel, encrypted_channel_key } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                self.db.ensure_channel(&channel);
+                self.db.set_channel_encrypted(&channel, &username);
+                self.db.store_channel_key(&channel, &username, &encrypted_channel_key, 1);
+
+                // Broadcast ChannelEncrypted
+                Self::broadcast_all_inner(&clients, &ServerMsg::ChannelEncrypted {
+                    channel: channel.clone(),
+                }, None);
+
+                // Update channel list for everyone
+                let ch_list = self.channel_list_inner(&clients);
+                Self::broadcast_all_inner(&clients, &ServerMsg::ChannelList { channels: ch_list }, None);
+            }
+
+            ClientMsg::RequestChannelKey { channel } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                // If we have a stored key for this user, send it directly
+                if let Some((encrypted_key, key_version)) = self.db.get_channel_key(&channel, &username) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                            channel, encrypted_key, key_version,
+                        });
+                    }
+                } else if let Some(pub_key) = self.db.get_public_key(&username) {
+                    // Broadcast request to online channel members
+                    let req_msg = ServerMsg::ChannelKeyRequest {
+                        channel: channel.clone(),
+                        requesting_user: username,
+                        public_key: pub_key,
+                    };
+                    Self::broadcast_to_channel_inner(&clients, &channel, &req_msg, Some(id));
+                }
+            }
+
+            ClientMsg::ProvideChannelKey { channel, target_user, encrypted_key } => {
+                let clients = self.clients.lock().await;
+                let _username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                let key_version = self.db.get_channel_key_version(&channel);
+                self.db.store_channel_key(&channel, &target_user, &encrypted_key, key_version);
+
+                // Forward to target user if online
+                for client in clients.values() {
+                    if client.username == target_user {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::ChannelKeyData {
+                            channel: channel.clone(),
+                            encrypted_key: encrypted_key.clone(),
+                            key_version,
+                        });
+                    }
+                }
+            }
+
+            ClientMsg::RotateChannelKey { channel, new_keys } => {
+                let clients = self.clients.lock().await;
+                let _username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+
+                let new_version = self.db.increment_channel_key_version(&channel);
+
+                // Store all new sealed keys
+                for (user, enc_key) in &new_keys {
+                    self.db.store_channel_key(&channel, user, enc_key, new_version);
+                }
+
+                // Broadcast key rotation to channel
+                Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelKeyRotated {
+                    channel: channel.clone(),
+                    key_version: new_version,
+                }, None);
+            }
         }
     }
 
@@ -1159,7 +1292,8 @@ impl Hub {
                     .values()
                     .filter(|c| c.channels.contains(&name))
                     .count();
-                ChannelInfo { name, user_count }
+                let encrypted = self.db.is_channel_encrypted(&name);
+                ChannelInfo { name, user_count, encrypted }
             })
             .collect()
     }

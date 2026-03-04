@@ -18,6 +18,8 @@ pub enum ClientMsg {
         ttl_secs: Option<u64>,
         /// Attached file IDs
         attachments: Option<Vec<String>>,
+        #[serde(default)]
+        encrypted: bool,
     },
     /// Join a channel (creates it if it doesn't exist)
     Join { channel: String },
@@ -76,6 +78,14 @@ pub enum ClientMsg {
     AssignRole { username: String, role_name: String },
     RemoveRole { username: String, role_name: String },
     GetUserRoles { username: String },
+
+    // ── E2E Encryption ──
+    UploadPublicKey { public_key: String },
+    GetPublicKeys { usernames: Vec<String> },
+    CreateEncryptedChannel { channel: String, encrypted_channel_key: String },
+    RequestChannelKey { channel: String },
+    ProvideChannelKey { channel: String, target_user: String, encrypted_key: String },
+    RotateChannelKey { channel: String, new_keys: HashMap<String, String> },
 }
 
 // ── Server → Client messages ────────────────────────────────────────
@@ -103,6 +113,8 @@ pub enum ServerMsg {
         attachments: Option<Vec<FileInfo>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         edited_at: Option<DateTime<Utc>>,
+        #[serde(default)]
+        encrypted: bool,
     },
     /// Channel history batch
     History { channel: String, messages: Vec<HistoryMessage> },
@@ -154,6 +166,14 @@ pub enum ServerMsg {
     InviteList { invites: Vec<InviteInfo> },
     RoleList { roles: Vec<RoleInfo> },
     UserRoles { username: String, roles: Vec<String> },
+
+    // ── E2E Encryption ──
+    PublicKeys { keys: HashMap<String, String> },
+    PublicKeyStored { username: String },
+    ChannelKeyData { channel: String, encrypted_key: String, key_version: i32 },
+    ChannelKeyRequest { channel: String, requesting_user: String, public_key: String },
+    ChannelEncrypted { channel: String },
+    ChannelKeyRotated { channel: String, key_version: i32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,12 +187,16 @@ pub struct HistoryMessage {
     pub attachments: Option<Vec<FileInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edited_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInfo {
     pub name: String,
     pub user_count: usize,
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +355,7 @@ impl ServerMsg {
         channel: &str, author: &str, content: &str,
         expires_at: Option<DateTime<Utc>>,
         attachments: Option<Vec<FileInfo>>,
+        encrypted: bool,
     ) -> Self {
         ServerMsg::Message {
             id: Uuid::new_v4().to_string(),
@@ -341,6 +366,7 @@ impl ServerMsg {
             expires_at,
             attachments,
             edited_at: None,
+            encrypted,
         }
     }
 }

@@ -116,6 +116,29 @@ impl Db {
                 used_at TEXT
             );
 
+            -- E2E encryption tables
+            CREATE TABLE IF NOT EXISTS user_public_keys (
+                username TEXT PRIMARY KEY REFERENCES users(username),
+                public_key TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS channel_encryption (
+                channel TEXT PRIMARY KEY REFERENCES channels(name),
+                key_version INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS channel_keys (
+                channel TEXT NOT NULL,
+                username TEXT NOT NULL,
+                encrypted_key TEXT NOT NULL,
+                key_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (channel, username, key_version)
+            );
+
             INSERT OR IGNORE INTO settings(key, value) VALUES ('registration_mode', 'open');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('channel_creation', 'all');
 
@@ -177,6 +200,15 @@ impl Db {
             .unwrap_or_default();
         if !replies_sql2.is_empty() && !replies_sql2.contains("edited_at") {
             let _ = conn.execute_batch("ALTER TABLE topic_replies ADD COLUMN edited_at TEXT;");
+        }
+
+        // Add encrypted column to messages if missing
+        let msg_sql3: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !msg_sql3.is_empty() && !msg_sql3.contains("encrypted") {
+            let _ = conn.execute_batch("ALTER TABLE messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;");
         }
 
         Ok(Db { conn: Mutex::new(conn) })
@@ -300,6 +332,9 @@ impl Db {
         // Delete files
         conn.execute("DELETE FROM files WHERE channel = ?1", params![name])
             .map_err(|e| e.to_string())?;
+        // Delete encryption data
+        let _ = conn.execute("DELETE FROM channel_keys WHERE channel = ?1", params![name]);
+        let _ = conn.execute("DELETE FROM channel_encryption WHERE channel = ?1", params![name]);
         // Delete channel
         let rows = conn.execute("DELETE FROM channels WHERE name = ?1", params![name])
             .map_err(|e| e.to_string())?;
@@ -320,15 +355,16 @@ impl Db {
         timestamp: &DateTime<Utc>,
         expires_at: Option<&DateTime<Utc>>,
         attachments: Option<&Vec<String>>,
+        encrypted: bool,
     ) {
         let conn = self.conn.lock().unwrap();
         let ts = timestamp.to_rfc3339();
         let exp = expires_at.map(|e| e.to_rfc3339());
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
         let _ = conn.execute(
-            "INSERT INTO messages (id, channel, author, content, timestamp, expires_at, attachments)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, channel, author, content, ts, exp, att_json],
+            "INSERT INTO messages (id, channel, author, content, timestamp, expires_at, attachments, encrypted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, channel, author, content, ts, exp, att_json, encrypted as i32],
         );
     }
 
@@ -338,7 +374,7 @@ impl Db {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at FROM messages
+                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted FROM messages
                  WHERE channel = ?1
                    AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY timestamp DESC LIMIT ?3",
@@ -351,14 +387,15 @@ impl Db {
                 let exp_str: Option<String> = row.get(4)?;
                 let att_str: Option<String> = row.get(5)?;
                 let edited_str: Option<String> = row.get(6)?;
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, ts_str, exp_str, att_str, edited_str))
+                let encrypted: bool = row.get::<_, i32>(7).unwrap_or(0) != 0;
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, ts_str, exp_str, att_str, edited_str, encrypted))
             })
             .unwrap()
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>();
 
         // Resolve file IDs to FileInfo
-        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str)| {
+        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted)| {
             let attachments = att_str
                 .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
                 .map(|ids| {
@@ -384,6 +421,7 @@ impl Db {
                 }),
                 attachments,
                 edited_at,
+                encrypted,
             }
         }).collect();
 
@@ -903,6 +941,120 @@ impl Db {
             params![code, username, now],
         ).map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    // ── E2E Encryption ────────────────────────────────────────────
+
+    pub fn store_public_key(&self, username: &str, public_key: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO user_public_keys(username, public_key) VALUES(?1, ?2)
+             ON CONFLICT(username) DO UPDATE SET public_key = ?2, uploaded_at = datetime('now')",
+            params![username, public_key],
+        );
+    }
+
+    pub fn get_public_key(&self, username: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT public_key FROM user_public_keys WHERE username = ?1",
+            params![username],
+            |row| row.get(0),
+        ).ok()
+    }
+
+    pub fn get_public_keys(&self, usernames: &[String]) -> HashMap<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut map = HashMap::new();
+        for u in usernames {
+            if let Ok(key) = conn.query_row(
+                "SELECT public_key FROM user_public_keys WHERE username = ?1",
+                params![u],
+                |row| row.get::<_, String>(0),
+            ) {
+                map.insert(u.clone(), key);
+            }
+        }
+        map
+    }
+
+    pub fn set_channel_encrypted(&self, channel: &str, created_by: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO channel_encryption(channel, created_by) VALUES(?1, ?2)",
+            params![channel, created_by],
+        );
+    }
+
+    pub fn is_channel_encrypted(&self, channel: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM channel_encryption WHERE channel = ?1",
+            params![channel],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false)
+    }
+
+    pub fn store_channel_key(&self, channel: &str, username: &str, encrypted_key: &str, key_version: i32) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO channel_keys(channel, username, encrypted_key, key_version) VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(channel, username, key_version) DO UPDATE SET encrypted_key = ?3, updated_at = datetime('now')",
+            params![channel, username, encrypted_key, key_version],
+        );
+    }
+
+    pub fn get_channel_key(&self, channel: &str, username: &str) -> Option<(String, i32)> {
+        let conn = self.conn.lock().unwrap();
+        // Get the latest version key for this user
+        conn.query_row(
+            "SELECT encrypted_key, key_version FROM channel_keys
+             WHERE channel = ?1 AND username = ?2
+             ORDER BY key_version DESC LIMIT 1",
+            params![channel, username],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?)),
+        ).ok()
+    }
+
+    pub fn get_channel_key_holders(&self, channel: &str, key_version: i32) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT username FROM channel_keys WHERE channel = ?1 AND key_version = ?2"
+        ).unwrap();
+        stmt.query_map(params![channel, key_version], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    pub fn increment_channel_key_version(&self, channel: &str) -> i32 {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE channel_encryption SET key_version = key_version + 1 WHERE channel = ?1",
+            params![channel],
+        );
+        conn.query_row(
+            "SELECT key_version FROM channel_encryption WHERE channel = ?1",
+            params![channel],
+            |row| row.get::<_, i32>(0),
+        ).unwrap_or(1)
+    }
+
+    pub fn delete_channel_keys_for_user(&self, channel: &str, username: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM channel_keys WHERE channel = ?1 AND username = ?2",
+            params![channel, username],
+        );
+    }
+
+    pub fn get_channel_key_version(&self, channel: &str) -> i32 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT key_version FROM channel_encryption WHERE channel = ?1",
+            params![channel],
+            |row| row.get::<_, i32>(0),
+        ).unwrap_or(1)
     }
 
     // ── Private helpers ─────────────────────────────────────────────

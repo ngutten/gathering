@@ -332,6 +332,9 @@
         <div class="join-channel">
           <input type="text" id="new-channel" placeholder="join or create #channel"
                  onkeydown="if(event.key==='Enter')joinChannel()">
+          <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.7rem;color:var(--text2);margin-top:0.3rem;cursor:pointer;">
+            <input type="checkbox" id="encrypted-channel-check"> Encrypted (E2E)
+          </label>
         </div>
       </div>
       <div class="sidebar-section">
@@ -350,8 +353,11 @@
         <button class="voice-btn voice-leave" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
       </div>
       <div class="sidebar-bottom">
-        Messages are encrypted in transit.<br>
-        Set TTL to auto-delete messages.
+        <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code></div>
+        <div style="display:flex;gap:0.3rem;">
+          <button onclick="exportPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Export Key</button>
+          <button onclick="importPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Import Key</button>
+        </div>
       </div>
     </div>
     <div class="chat-main">
@@ -485,6 +491,36 @@
 </div>
 
 <script>
+// Load libsodium UMD modules in the browser.
+// Both files use a UMD pattern that checks `typeof exports`. We expose
+// a global `exports` object so the CommonJS branch is taken, giving us
+// control over where the values end up.
+(function() {
+  var modules = {};
+  window.exports = {};
+  window.require = function(name) { return modules[name]; };
+
+  var s1 = document.createElement('script');
+  s1.src = 'libsodium.js';
+  s1.onload = function() {
+    // Core libsodium populated window.exports via I(exports)
+    modules['libsodium-sumo'] = window.exports;
+    window.exports = {};
+
+    var s2 = document.createElement('script');
+    s2.src = 'libsodium-wrappers.js';
+    s2.onload = function() {
+      // Wrappers populated window.exports via a(exports, require(...))
+      window.sodium = window.exports;
+      delete window.exports;
+      delete window.require;
+    };
+    document.head.appendChild(s2);
+  };
+  document.head.appendChild(s1);
+})();
+</script>
+<script>
 // ── State ───────────────────────────────────────────────────────────
 let ws = null;
 let token = localStorage.getItem('gathering_token');
@@ -496,6 +532,221 @@ let pendingAttachments = []; // {id, filename, size}
 let userRoles = [];
 let isAdmin = false;
 let editingMessageId = null;
+
+// ── E2E Encryption state ────────────────────────────────────────────
+let e2eReady = false;
+let myKeyPair = null;   // { publicKey, privateKey } (Uint8Array)
+let channelKeys = {};   // channelName -> Uint8Array (symmetric key)
+let publicKeyCache = {};// username -> base64 public key
+let encryptedChannels = new Set(); // set of encrypted channel names
+
+async function initE2E() {
+  // Wait for libsodium to be loaded by the shim
+  while (typeof sodium === 'undefined' || !sodium.ready) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  await sodium.ready;
+  // Load or generate X25519 keypair
+  const storedSk = localStorage.getItem('gathering_e2e_sk');
+  const storedPk = localStorage.getItem('gathering_e2e_pk');
+  if (storedSk && storedPk) {
+    myKeyPair = {
+      privateKey: sodium.from_base64(storedSk),
+      publicKey: sodium.from_base64(storedPk),
+    };
+  } else {
+    const kp = sodium.crypto_box_keypair();
+    myKeyPair = { publicKey: kp.publicKey, privateKey: kp.privateKey };
+    localStorage.setItem('gathering_e2e_sk', sodium.to_base64(kp.privateKey));
+    localStorage.setItem('gathering_e2e_pk', sodium.to_base64(kp.publicKey));
+    if (!localStorage.getItem('gathering_e2e_warned')) {
+      localStorage.setItem('gathering_e2e_warned', '1');
+      setTimeout(() => appendSystem('E2E keypair generated. Export your key from the sidebar to back it up. If lost, encrypted history cannot be recovered.'), 500);
+    }
+  }
+  e2eReady = true;
+  // Upload public key to server
+  ws.send(JSON.stringify({ type: 'UploadPublicKey', public_key: sodium.to_base64(myKeyPair.publicKey) }));
+}
+
+function generateChannelKey() {
+  return sodium.crypto_aead_xchacha20poly1305_ietf_keygen();
+}
+
+function encryptMessage(plaintext, channelKey) {
+  const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  const encoder = new TextEncoder();
+  const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    encoder.encode(plaintext), null, null, nonce, channelKey
+  );
+  // version_byte(1) + nonce(24) + ciphertext
+  const payload = new Uint8Array(1 + nonce.length + ciphertext.length);
+  payload[0] = 0x01;
+  payload.set(nonce, 1);
+  payload.set(ciphertext, 1 + nonce.length);
+  return sodium.to_base64(payload);
+}
+
+function decryptMessage(base64Payload, channelKey) {
+  try {
+    const payload = sodium.from_base64(base64Payload);
+    if (payload[0] !== 0x01) return null;
+    const nonce = payload.slice(1, 1 + sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    const ciphertext = payload.slice(1 + sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    const plainBytes = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null, ciphertext, null, nonce, channelKey
+    );
+    return new TextDecoder().decode(plainBytes);
+  } catch (e) {
+    return null;
+  }
+}
+
+function encryptChannelKeyForUser(channelKey, recipientPubKeyBase64) {
+  const recipientPk = sodium.from_base64(recipientPubKeyBase64);
+  const sealed = sodium.crypto_box_seal(channelKey, recipientPk);
+  return sodium.to_base64(sealed);
+}
+
+function decryptChannelKey(encryptedKeyBase64) {
+  try {
+    const sealed = sodium.from_base64(encryptedKeyBase64);
+    return sodium.crypto_box_seal_open(sealed, myKeyPair.publicKey, myKeyPair.privateKey);
+  } catch (e) {
+    return null;
+  }
+}
+
+function getKeyFingerprint() {
+  if (!myKeyPair) return '';
+  const hash = sodium.crypto_generichash(32, myKeyPair.publicKey);
+  return sodium.to_hex(hash).substring(0, 16);
+}
+
+function exportPrivateKey() {
+  if (!myKeyPair) return;
+  const data = JSON.stringify({
+    sk: sodium.to_base64(myKeyPair.privateKey),
+    pk: sodium.to_base64(myKeyPair.publicKey),
+  });
+  const blob = new Blob([data], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `gathering-key-${currentUser}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importPrivateKey() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+      const data = JSON.parse(text);
+      const sk = sodium.from_base64(data.sk);
+      const pk = sodium.from_base64(data.pk);
+      myKeyPair = { privateKey: sk, publicKey: pk };
+      localStorage.setItem('gathering_e2e_sk', data.sk);
+      localStorage.setItem('gathering_e2e_pk', data.pk);
+      // Re-upload public key
+      ws.send(JSON.stringify({ type: 'UploadPublicKey', public_key: data.pk }));
+      appendSystem('Key imported successfully. Re-request channel keys to decrypt history.');
+      // Clear cached channel keys - need to re-request with new key
+      channelKeys = {};
+      updateKeyUI();
+    } catch (err) {
+      appendSystem('Failed to import key: ' + err.message);
+    }
+  };
+  input.click();
+}
+
+function updateKeyUI() {
+  const fp = document.getElementById('key-fingerprint');
+  if (fp) fp.textContent = getKeyFingerprint();
+}
+
+let pendingKeyRequests = []; // {channel, user, publicKey}
+
+function showKeyApproval(channel, user, publicKey) {
+  // Deduplicate
+  if (pendingKeyRequests.some(r => r.channel === channel && r.user === user)) return;
+  pendingKeyRequests.push({ channel, user, publicKey });
+  renderKeyRequests();
+}
+
+function approveKeyRequest(index) {
+  const req = pendingKeyRequests[index];
+  if (!req || !channelKeys[req.channel]) return;
+  const sealed = encryptChannelKeyForUser(channelKeys[req.channel], req.publicKey);
+  ws.send(JSON.stringify({
+    type: 'ProvideChannelKey',
+    channel: req.channel,
+    target_user: req.user,
+    encrypted_key: sealed,
+  }));
+  // Cache their public key for future key rotations
+  publicKeyCache[req.user] = req.publicKey;
+  pendingKeyRequests.splice(index, 1);
+  renderKeyRequests();
+  appendSystem(`Granted ${req.user} access to #${req.channel}`);
+}
+
+function denyKeyRequest(index) {
+  const req = pendingKeyRequests[index];
+  pendingKeyRequests.splice(index, 1);
+  renderKeyRequests();
+  if (req) appendSystem(`Denied ${req.user} access to #${req.channel}`);
+}
+
+function renderKeyRequests() {
+  let el = document.getElementById('key-requests');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'key-requests';
+    const sidebar = document.querySelector('.sidebar');
+    const bottom = sidebar.querySelector('.sidebar-bottom');
+    sidebar.insertBefore(el, bottom);
+  }
+  if (pendingKeyRequests.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = '<div style="padding:0.3rem 1rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border);">' +
+    '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--orange);letter-spacing:0.05em;margin-bottom:0.3rem;">Key Requests</div>' +
+    pendingKeyRequests.map((r, i) =>
+      `<div style="font-size:0.75rem;margin-bottom:0.4rem;padding:0.3rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;">` +
+      `<div><strong>${escapeHtml(r.user)}</strong> wants access to <strong>#${escapeHtml(r.channel)}</strong></div>` +
+      `<div style="display:flex;gap:0.3rem;margin-top:0.2rem;">` +
+      `<button onclick="approveKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--green);color:#000;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Approve</button>` +
+      `<button onclick="denyKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--red);color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Deny</button>` +
+      `</div></div>`
+    ).join('') +
+    '</div>';
+}
+
+async function triggerKeyRotation(channel, excludeUser) {
+  if (!e2eReady || !channelKeys[channel]) return;
+  // Generate a new channel key
+  const newKey = generateChannelKey();
+  channelKeys[channel] = newKey;
+  // We need public keys of all remaining channel members to seal the new key for them
+  // Request public keys of online users, then seal. For simplicity, seal for self now
+  // and the server will have stored keys for other members that they can re-request
+  const newKeys = {};
+  newKeys[currentUser] = encryptChannelKeyForUser(newKey, sodium.to_base64(myKeyPair.publicKey));
+  // Also seal for any users whose public keys we have cached
+  for (const [user, pk] of Object.entries(publicKeyCache)) {
+    if (user !== excludeUser && user !== currentUser) {
+      newKeys[user] = encryptChannelKeyForUser(newKey, pk);
+    }
+  }
+  ws.send(JSON.stringify({ type: 'RotateChannelKey', channel, new_keys: newKeys }));
+}
 
 // ── Auth ────────────────────────────────────────────────────────────
 async function checkServerInfo() {
@@ -588,6 +839,8 @@ function handleServerMsg(msg) {
         document.getElementById('display-user').textContent = currentUser;
         // Show admin gear if admin
         document.getElementById('admin-gear-btn').style.display = isAdmin ? '' : 'none';
+        // Initialize E2E encryption
+        initE2E().then(() => updateKeyUI());
       } else {
         document.getElementById('auth-error').textContent = msg.error || 'Auth failed';
         token = null;
@@ -604,12 +857,16 @@ function handleServerMsg(msg) {
       if (msg.channel === currentChannel) {
         const el = document.getElementById('messages');
         el.innerHTML = '';
+        if (encryptedChannels.has(msg.channel) && !channelKeys[msg.channel] && msg.messages.some(m => m.encrypted)) {
+          appendSystem('Waiting for an existing member to come online and share the channel key...');
+        }
         msg.messages.forEach(m => appendMessage({ ...m, channel: msg.channel }));
       }
       break;
 
     case 'ChannelList':
       channels = msg.channels;
+      channels.forEach(ch => { if (ch.encrypted) encryptedChannels.add(ch.name); });
       renderChannels();
       break;
 
@@ -626,6 +883,14 @@ function handleServerMsg(msg) {
     case 'UserLeft':
       if (msg.channel === currentChannel) {
         appendSystem(`${msg.username} left`);
+      }
+      // Remove any pending key request from the departing user
+      pendingKeyRequests = pendingKeyRequests.filter(r => !(r.channel === msg.channel && r.user === msg.username));
+      renderKeyRequests();
+      // Key rotation: if this user had been admitted (in publicKeyCache), rotate
+      if (encryptedChannels.has(msg.channel) && channelKeys[msg.channel] && e2eReady && publicKeyCache[msg.username]) {
+        delete publicKeyCache[msg.username];
+        triggerKeyRotation(msg.channel, msg.username);
       }
       break;
 
@@ -723,9 +988,17 @@ function handleServerMsg(msg) {
     case 'MessageEdited': {
       const msgEl = document.querySelector(`.msg[data-msg-id="${msg.id}"]`);
       if (msgEl) {
+        let editedContent = msg.content;
+        const wasEncrypted = msgEl.getAttribute('data-encrypted') === '1';
+        if (wasEncrypted && channelKeys[msg.channel]) {
+          const dec = decryptMessage(msg.content, channelKeys[msg.channel]);
+          if (dec !== null) editedContent = dec;
+          else editedContent = '[Encrypted - decryption failed]';
+        }
         const bodyEl = msgEl.querySelector('.body');
-        if (bodyEl) bodyEl.innerHTML = renderRichContent(msg.content);
-        msgEl.setAttribute('data-content', msg.content);
+        if (bodyEl) bodyEl.innerHTML = renderRichContent(editedContent);
+        msgEl.setAttribute('data-content', editedContent);
+        msgEl.setAttribute('data-raw-content', msg.content);
         // Add/update edited indicator
         let editedSpan = msgEl.querySelector('.edited');
         if (!editedSpan) {
@@ -799,6 +1072,47 @@ function handleServerMsg(msg) {
       if (currentChannel === msg.channel) {
         switchChannel('general');
       }
+      break;
+
+    // ── E2E Encryption ──
+    case 'PublicKeyStored':
+      break;
+
+    case 'PublicKeys':
+      Object.assign(publicKeyCache, msg.keys);
+      break;
+
+    case 'ChannelKeyData': {
+      const symKey = decryptChannelKey(msg.encrypted_key);
+      if (symKey) {
+        channelKeys[msg.channel] = symKey;
+        // If this is the current channel, re-request history to decrypt
+        if (msg.channel === currentChannel) {
+          ws.send(JSON.stringify({ type: 'History', channel: msg.channel, limit: 100 }));
+        }
+      }
+      break;
+    }
+
+    case 'ChannelKeyRequest': {
+      // Another user needs the channel key - show approval prompt
+      if (channelKeys[msg.channel]) {
+        showKeyApproval(msg.channel, msg.requesting_user, msg.public_key);
+      }
+      break;
+    }
+
+    case 'ChannelEncrypted':
+      encryptedChannels.add(msg.channel);
+      // Update the channel in the local list
+      { const ch = channels.find(c => c.name === msg.channel);
+        if (ch) ch.encrypted = true; }
+      renderChannels();
+      break;
+
+    case 'ChannelKeyRotated':
+      // Request the new key
+      ws.send(JSON.stringify({ type: 'RequestChannelKey', channel: msg.channel }));
       break;
 
     // ── Admin responses ──
@@ -985,7 +1299,6 @@ function appendMessage(msg) {
   div.className = 'msg';
   div.setAttribute('data-msg-id', msg.id);
   div.setAttribute('data-author', msg.author);
-  div.setAttribute('data-content', msg.content);
 
   const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   let ttlHtml = '';
@@ -1003,7 +1316,28 @@ function appendMessage(msg) {
     editedHtml = '<span class="edited">(edited)</span>';
   }
 
-  const content = renderRichContent(msg.content);
+  let displayContent = msg.content;
+  let encBadge = '';
+  if (msg.encrypted) {
+    const ch = msg.channel || currentChannel;
+    if (channelKeys[ch]) {
+      const decrypted = decryptMessage(msg.content, channelKeys[ch]);
+      if (decrypted !== null) {
+        displayContent = decrypted;
+      } else {
+        displayContent = '[Encrypted - decryption failed]';
+      }
+    } else {
+      displayContent = '[Encrypted - key unavailable]';
+    }
+    encBadge = '<span class="ttl" style="color:var(--green);">[E2E]</span>';
+  }
+  // Store original content for editing
+  div.setAttribute('data-content', msg.encrypted ? displayContent : msg.content);
+  div.setAttribute('data-encrypted', msg.encrypted ? '1' : '0');
+  div.setAttribute('data-raw-content', msg.content);
+
+  const content = renderRichContent(displayContent);
 
   // Build attachments HTML
   let attachHtml = '';
@@ -1036,7 +1370,7 @@ function appendMessage(msg) {
   div.innerHTML = `${actionsHtml}
     <div class="meta">
       <span class="author">${escapeHtml(msg.author)}</span>
-      <span class="time">${time}</span>${ttlHtml}${editedHtml}
+      <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}
     </div>
     <div class="body">${content}</div>${attachHtml}`;
   el.appendChild(div);
@@ -1054,13 +1388,16 @@ function appendSystem(text) {
 
 function renderChannels() {
   const el = document.getElementById('channel-list');
-  el.innerHTML = channels.map(ch => `
-    <div class="channel-item ${ch.name === currentChannel ? 'active' : ''}"
+  // Track encrypted channels
+  channels.forEach(ch => { if (ch.encrypted) encryptedChannels.add(ch.name); });
+  el.innerHTML = channels.map(ch => {
+    const lock = ch.encrypted ? '&#x1F512; ' : '#';
+    return `<div class="channel-item ${ch.name === currentChannel ? 'active' : ''}"
          onclick="switchChannel('${ch.name}')">
-      <span>#${escapeHtml(ch.name)}</span>
+      <span>${lock}${escapeHtml(ch.name)}</span>
       <span class="count">${ch.user_count}</span>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 function renderOnlineUsers(users) {
@@ -1138,6 +1475,7 @@ function removePendingFile(index) {
 function startEditMessage(msgId) {
   const msgEl = document.querySelector(`.msg[data-msg-id="${msgId}"]`);
   if (!msgEl) return;
+  // Use decrypted content for editing
   const content = msgEl.getAttribute('data-content');
   editingMessageId = msgId;
   const input = document.getElementById('msg-input');
@@ -1168,13 +1506,29 @@ function switchChannel(name) {
   renderChannels();
   switchView('chat');
   ws.send(JSON.stringify({ type: 'History', channel: name, limit: 100 }));
+  // Request channel key if encrypted and not cached
+  if (encryptedChannels.has(name) && !channelKeys[name] && e2eReady) {
+    ws.send(JSON.stringify({ type: 'RequestChannelKey', channel: name }));
+  }
 }
 
 function joinChannel() {
   const input = document.getElementById('new-channel');
   let name = input.value.trim().replace(/^#/, '').replace(/[^a-zA-Z0-9_-]/g, '');
   if (!name) return;
+  const encCheck = document.getElementById('encrypted-channel-check');
+  const wantEncrypted = encCheck && encCheck.checked;
   input.value = '';
+  if (encCheck) encCheck.checked = false;
+
+  if (wantEncrypted && e2eReady) {
+    // Create encrypted channel: generate channel key, seal to self, send
+    const chKey = generateChannelKey();
+    channelKeys[name] = chKey;
+    const sealedForSelf = encryptChannelKeyForUser(chKey, sodium.to_base64(myKeyPair.publicKey));
+    ws.send(JSON.stringify({ type: 'CreateEncryptedChannel', channel: name, encrypted_channel_key: sealedForSelf }));
+  }
+
   ws.send(JSON.stringify({ type: 'Join', channel: name }));
   currentChannel = name;
   document.getElementById('chat-channel-name').textContent = `#${name}`;
@@ -1188,7 +1542,11 @@ function sendMessage() {
   // If editing, send edit instead
   if (editingMessageId) {
     if (!content) return;
-    ws.send(JSON.stringify({ type: 'EditMessage', message_id: editingMessageId, content }));
+    let editContent = content;
+    if (channelKeys[currentChannel]) {
+      editContent = encryptMessage(content, channelKeys[currentChannel]);
+    }
+    ws.send(JSON.stringify({ type: 'EditMessage', message_id: editingMessageId, content: editContent }));
     cancelEdit();
     return;
   }
@@ -1199,11 +1557,19 @@ function sendMessage() {
   const ttlSelect = document.getElementById('ttl-select');
   const ttl = ttlSelect.value ? parseInt(ttlSelect.value) : null;
 
+  let finalContent = content || '';
+  let isEncrypted = false;
+  if (channelKeys[currentChannel] && finalContent) {
+    finalContent = encryptMessage(finalContent, channelKeys[currentChannel]);
+    isEncrypted = true;
+  }
+
   const msg = {
     type: 'Send',
     channel: currentChannel,
-    content: content || '',
+    content: finalContent,
     ttl_secs: ttl,
+    encrypted: isEncrypted,
   };
 
   if (pendingAttachments.length > 0) {
