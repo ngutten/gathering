@@ -1,6 +1,7 @@
 // render.js — Pure rendering utilities
 
 import { apiUrl } from './config.js';
+import { convertShortcodes } from './emoji.js';
 
 export function escapeHtml(s) {
   const d = document.createElement('div');
@@ -81,6 +82,9 @@ export function renderRichContent(raw) {
 
   // Newlines to <br> (but not inside pre/blockquote)
   text = text.replace(/\n/g, '<br>');
+
+  // Convert :shortcodes: to emoji (before restoring placeholders)
+  text = convertShortcodes(text);
 
   // Restore placeholders
   text = text.replace(/\x00PH(\d+)\x00/g, (_, i) => placeholders[parseInt(i)]);

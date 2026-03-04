@@ -83,6 +83,14 @@ pub enum ClientMsg {
     RemoveRole { username: String, role_name: String },
     GetUserRoles { username: String },
 
+    // ── File Management ──
+    ListMyFiles,
+    SetFilePinned { file_id: String, pinned: bool },
+    DeleteFile { file_id: String },
+
+    // ── Search ──
+    SearchMessages { query: String, channel: Option<String> },
+
     // ── Direct Messages ──
     StartDM { target_user: String },
     ListDMs,
@@ -174,6 +182,14 @@ pub enum ServerMsg {
     InviteList { invites: Vec<InviteInfo> },
     RoleList { roles: Vec<RoleInfo> },
     UserRoles { username: String, roles: Vec<String> },
+
+    // ── File Management ──
+    MyFileList { files: Vec<UserFileInfo>, used_bytes: i64, quota_bytes: i64 },
+    FilePinned { file_id: String, pinned: bool },
+    FileDeleted { file_id: String },
+
+    // ── Search ──
+    SearchResults { query: String, results: Vec<SearchResult> },
 
     // ── Direct Messages ──
     DMStarted { channel: String, other_user: String, #[serde(default)] initiated: bool },
@@ -300,6 +316,30 @@ pub struct InviteInfo {
 pub struct RoleInfo {
     pub name: String,
     pub permissions: Vec<String>,
+    #[serde(default)]
+    pub disk_quota_mb: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserFileInfo {
+    pub id: String,
+    pub filename: String,
+    pub size: i64,
+    pub mime_type: String,
+    pub channel: String,
+    pub created_at: String,
+    pub pinned: bool,
+}
+
+// ── Search types ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub id: String,
+    pub channel: String,
+    pub author: String,
+    pub content: String,
+    pub timestamp: String,
 }
 
 // ── Config ──────────────────────────────────────────────────────────

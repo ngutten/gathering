@@ -8,6 +8,8 @@ import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { switchView, renderTopicList, renderThread, appendTopicReply } from './topics.js';
 import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCreated, onUserRolesResponse } from './admin.js';
+import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
+import { handleSearchResults, handleSearchHistory } from './search.js';
 
 export function handleServerMsg(msg) {
   switch (msg.type) {
@@ -31,9 +33,16 @@ export function handleServerMsg(msg) {
 
     case 'Message':
       appendMessage(msg);
+      if (msg.channel && msg.channel !== state.currentChannel && msg.author !== state.currentUser) {
+        state.unreadCounts[msg.channel] = (state.unreadCounts[msg.channel] || 0) + 1;
+        renderChannels();
+        renderDMList();
+      }
       break;
 
     case 'History':
+      // Check if this is a search-triggered history fetch
+      if (state._pendingSearch && handleSearchHistory(msg)) break;
       if (msg.channel === state.currentChannel) {
         const el = document.getElementById('messages');
         el.innerHTML = '';
@@ -349,6 +358,22 @@ export function handleServerMsg(msg) {
         state.encryptedChannels.add(dm.channel);
       });
       renderDMList();
+      break;
+
+    // ── Search ──
+    case 'SearchResults':
+      handleSearchResults(msg);
+      break;
+
+    // ── File Management ──
+    case 'MyFileList':
+      handleMyFileList(msg);
+      break;
+    case 'FilePinned':
+      handleFilePinned(msg);
+      break;
+    case 'FileDeleted':
+      handleFileDeleted(msg);
       break;
 
     // ── Admin responses ──

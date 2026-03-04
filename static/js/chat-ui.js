@@ -106,10 +106,13 @@ export function renderChannels() {
   state.channels.forEach(ch => { if (ch.encrypted) state.encryptedChannels.add(ch.name); });
   el.innerHTML = state.channels.filter(ch => !isDMChannel(ch.name)).map(ch => {
     const lock = ch.encrypted ? '&#x1F512; ' : '#';
-    return `<div class="channel-item ${ch.name === state.currentChannel ? 'active' : ''}"
+    const unread = state.unreadCounts[ch.name] || 0;
+    const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+    const boldClass = unread > 0 ? ' has-unread' : '';
+    return `<div class="channel-item${boldClass} ${ch.name === state.currentChannel ? 'active' : ''}"
          onclick="switchChannel('${ch.name}')">
       <span>${lock}${escapeHtml(ch.name)}</span>
-      <span class="count">${ch.user_count}</span>
+      <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
     </div>`;
   }).join('');
 }
@@ -130,11 +133,15 @@ export function renderDMList() {
     el.innerHTML = '';
     return;
   }
-  el.innerHTML = entries.map(([ch, other]) =>
-    `<div class="dm-item ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
+  el.innerHTML = entries.map(([ch, other]) => {
+    const unread = state.unreadCounts[ch] || 0;
+    const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+    const boldClass = unread > 0 ? ' has-unread' : '';
+    return `<div class="dm-item${boldClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
       <span class="dm-name">&#x1F512; ${escapeHtml(other)}</span>
-    </div>`
-  ).join('');
+      ${unreadBadge}
+    </div>`;
+  }).join('');
 }
 
 export function startDM(targetUser) {
@@ -154,6 +161,10 @@ export function switchChannel(name) {
   state.currentChannel = name;
   state.currentTopicId = null;
   state.topicsList = [];
+  // Clear unread for this channel
+  state.unreadCounts[name] = 0;
+  state.lastReadTimestamps[name] = new Date().toISOString();
+  try { localStorage.setItem('gathering_last_read_' + name, state.lastReadTimestamps[name]); } catch(e) {}
   if (isDMChannel(name)) {
     const other = state.dmChannels[name] || name;
     document.getElementById('chat-channel-name').textContent = `DM: ${other}`;

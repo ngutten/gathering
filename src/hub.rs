@@ -5,7 +5,8 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::db::Db;
-use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg, TopicSummary, TopicReplyData};
+use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg, TopicSummary, TopicReplyData, SearchResult};
+use std::path::PathBuf;
 
 /// A connected user's handle
 struct Client {
@@ -23,14 +24,16 @@ pub struct Hub {
     clients: Mutex<HashMap<usize, Client>>,
     db: Arc<Db>,
     next_id: Mutex<usize>,
+    data_dir: PathBuf,
 }
 
 impl Hub {
-    pub fn new(db: Arc<Db>) -> Self {
+    pub fn new(db: Arc<Db>, data_dir: PathBuf) -> Self {
         Hub {
             clients: Mutex::new(HashMap::new()),
             db,
             next_id: Mutex::new(0),
+            data_dir,
         }
     }
 
@@ -1247,6 +1250,95 @@ impl Hub {
                     channel: channel.clone(),
                     key_version: new_version,
                 }, None);
+            }
+
+            // ── Search ──────────────────────────────────────────────
+
+            ClientMsg::SearchMessages { query, channel } => {
+                let clients = self.clients.lock().await;
+                let _username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                let results = self.db.search_messages(&query, channel.as_deref(), 50);
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::SearchResults { query, results });
+                }
+            }
+
+            // ── File Management ─────────────────────────────────────
+
+            ClientMsg::ListMyFiles => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                let files = self.db.list_user_files(&username);
+                let used_bytes = self.db.get_user_disk_usage(&username);
+                let quota_bytes = self.db.get_user_quota(&username);
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::MyFileList { files, used_bytes, quota_bytes });
+                }
+            }
+
+            ClientMsg::SetFilePinned { file_id, pinned } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                // Verify ownership
+                match self.db.get_file_owner(&file_id) {
+                    Some(owner) if owner == username => {}
+                    _ => {
+                        if let Some(client) = clients.get(&id) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::error("File not found or not owned by you"));
+                        }
+                        return;
+                    }
+                }
+                if let Err(e) = self.db.set_file_pinned(&file_id, pinned) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error(e));
+                    }
+                    return;
+                }
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::FilePinned { file_id, pinned });
+                }
+            }
+
+            ClientMsg::DeleteFile { file_id } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                // Verify ownership
+                match self.db.get_file_owner(&file_id) {
+                    Some(owner) if owner == username => {}
+                    _ => {
+                        if let Some(client) = clients.get(&id) {
+                            let _ = Self::send_to(&client.tx, &ServerMsg::error("File not found or not owned by you"));
+                        }
+                        return;
+                    }
+                }
+                if let Some((_fid, filename)) = self.db.delete_file_record(&file_id) {
+                    // Delete from disk
+                    let ext = std::path::Path::new(&filename)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("bin");
+                    let disk_name = format!("{}.{}", file_id, ext);
+                    let file_path = self.data_dir.join("uploads").join(&disk_name);
+                    let _ = std::fs::remove_file(&file_path);
+
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::FileDeleted { file_id });
+                    }
+                }
             }
 
             // ── Direct Messages ─────────────────────────────────────

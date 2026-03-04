@@ -59,3 +59,16 @@ export async function doAuth(endpoint) {
 
 export function doLogin() { doAuth('login'); }
 export function doRegister() { doAuth('register'); }
+
+export function doLogout() {
+  localStorage.removeItem('gathering_token');
+  state.token = null;
+  if (state.ws) {
+    state.ws.onclose = null; // prevent auto-reconnect
+    state.ws.close();
+    state.ws = null;
+  }
+  document.getElementById('chat-screen').style.display = 'none';
+  document.getElementById('auth-screen').style.display = 'flex';
+  document.getElementById('password').value = '';
+}

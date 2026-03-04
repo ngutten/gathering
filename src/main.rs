@@ -83,7 +83,7 @@ async fn main() {
         let _ = db.assign_role(admin_name, "admin");
     }
 
-    let hub = Hub::new(db.clone());
+    let hub = Hub::new(db.clone(), data_dir.clone());
     let state = Arc::new(AppState { hub, db: db.clone(), data_dir: data_dir.clone(), config });
 
     tls::ensure_tls(&data_dir);
@@ -341,6 +341,38 @@ async fn handle_upload(
 
     if channel.is_empty() {
         channel = "general".to_string();
+    }
+
+    // Check disk quota
+    let new_size = data.len() as i64;
+    let quota_bytes = state.db.get_user_quota(&username);
+    if quota_bytes > 0 {
+        let mut used_bytes = state.db.get_user_disk_usage(&username);
+        if used_bytes + new_size > quota_bytes {
+            // Auto-delete oldest released (unpinned) files to make room
+            let released = state.db.get_released_files_for_user(&username);
+            for (fid, fname, fsize) in released {
+                if used_bytes + new_size <= quota_bytes { break; }
+                let ext = std::path::Path::new(&fname)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("bin");
+                let disk_name = format!("{}.{}", fid, ext);
+                let fpath = state.data_dir.join("uploads").join(&disk_name);
+                let _ = tokio::fs::remove_file(&fpath).await;
+                state.db.delete_file_record(&fid);
+                used_bytes -= fsize;
+            }
+            // If still over quota, reject
+            if used_bytes + new_size > quota_bytes {
+                let used_mb = used_bytes as f64 / (1024.0 * 1024.0);
+                let quota_mb = quota_bytes as f64 / (1024.0 * 1024.0);
+                return (StatusCode::BAD_REQUEST, Json(UploadResponse {
+                    ok: false, file: None,
+                    error: Some(format!("Disk quota exceeded: {:.1}/{:.0} MB used. Pin fewer files or delete some.", used_mb, quota_mb)),
+                }));
+            }
+        }
     }
 
     let file_id = uuid::Uuid::new_v4().to_string();

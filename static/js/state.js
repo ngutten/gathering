@@ -52,7 +52,22 @@ const state = {
 
   // Input state
   lastTypingSent: 0,
+
+  // Unread tracking
+  unreadCounts: {},
+  lastReadTimestamps: {},
 };
+
+// Load last-read timestamps from localStorage
+try {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('gathering_last_read_')) {
+      const channel = key.substring('gathering_last_read_'.length);
+      state.lastReadTimestamps[channel] = localStorage.getItem(key);
+    }
+  }
+} catch(e) {}
 
 const _listeners = {};
 

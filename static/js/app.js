@@ -3,13 +3,16 @@
 import state, { on } from './state.js';
 import { connectWS } from './transport.js';
 import { handleServerMsg } from './messages.js';
-import { checkServerInfo, doLogin, doRegister } from './auth.js';
+import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
 import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel } from './chat-ui.js';
 import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, removePendingFile, startEditMessage, cancelEdit, deleteMessage, joinChannel } from './input.js';
 import { joinVoice, leaveVoice, cleanupVoice, toggleMute, toggleDeafen } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
 import { openAdminPanel, closeAdminPanel, switchAdminTab, updateSetting, deleteChannel, createInvite, assignRoleToUser, removeRoleFromUser } from './admin.js';
 import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest } from './crypto.js';
+import { toggleEmojiPicker } from './emoji.js';
+import { openFileManager, closeFileManager, toggleFilePin, deleteUserFile } from './files.js';
+import { toggleSearch, closeSearch, executeSearch, scrollToMessage } from './search.js';
 
 // ── Wire event emitter ──
 on('server-message', handleServerMsg);
@@ -21,6 +24,7 @@ on('ws-closed', () => {
 // ── Expose functions to window for inline onclick handlers ──
 window.doLogin = doLogin;
 window.doRegister = doRegister;
+window.doLogout = doLogout;
 window.joinChannel = joinChannel;
 window.switchChannel = switchChannel;
 window.sendMessage = sendMessage;
@@ -65,6 +69,15 @@ window.exportPrivateKey = exportPrivateKey;
 window.importPrivateKey = importPrivateKey;
 window.approveKeyRequest = approveKeyRequest;
 window.denyKeyRequest = denyKeyRequest;
+window.toggleEmojiPicker = toggleEmojiPicker;
+window.openFileManager = openFileManager;
+window.closeFileManager = closeFileManager;
+window.toggleFilePin = toggleFilePin;
+window.deleteUserFile = deleteUserFile;
+window.toggleSearch = toggleSearch;
+window.closeSearch = closeSearch;
+window.executeSearch = executeSearch;
+window.scrollToMessage = scrollToMessage;
 
 // ── Initialize ──
 checkServerInfo();

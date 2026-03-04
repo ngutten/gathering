@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-use crate::protocol::{DMInfo, FileInfo, HistoryMessage, InviteInfo, RoleInfo, TopicDetailData, TopicReplyData, TopicSummary};
+use crate::protocol::{DMInfo, FileInfo, HistoryMessage, InviteInfo, RoleInfo, SearchResult, TopicDetailData, TopicReplyData, TopicSummary, UserFileInfo};
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -237,6 +237,24 @@ impl Db {
                 PRIMARY KEY (channel, username)
             );"
         )?;
+
+        // Add disk_quota_mb column to roles if missing
+        let roles_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='roles'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !roles_sql.is_empty() && !roles_sql.contains("disk_quota_mb") {
+            let _ = conn.execute_batch("ALTER TABLE roles ADD COLUMN disk_quota_mb INTEGER NOT NULL DEFAULT 0;");
+        }
+
+        // Add pinned column to files if missing
+        let files_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='files'")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)))
+            .unwrap_or_default();
+        if !files_sql.is_empty() && !files_sql.contains("pinned") {
+            let _ = conn.execute_batch("ALTER TABLE files ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;");
+        }
 
         Ok(Db { conn: Mutex::new(conn) })
     }
@@ -791,6 +809,16 @@ impl Db {
         );
     }
 
+    pub fn upsert_role_with_quota(&self, name: &str, permissions: &[String], disk_quota_mb: i64) {
+        let conn = self.conn.lock().unwrap();
+        let perms_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".to_string());
+        let _ = conn.execute(
+            "INSERT INTO roles(name, permissions, disk_quota_mb) VALUES(?1, ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET permissions = ?2, disk_quota_mb = ?3",
+            params![name, perms_json, disk_quota_mb],
+        );
+    }
+
     pub fn delete_role(&self, name: &str) -> Result<(), String> {
         if name == "user" || name == "admin" {
             return Err("Cannot delete built-in roles".into());
@@ -808,13 +836,14 @@ impl Db {
 
     pub fn list_roles(&self) -> Vec<RoleInfo> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT name, permissions FROM roles ORDER BY name").unwrap();
+        let mut stmt = conn.prepare("SELECT name, permissions, disk_quota_mb FROM roles ORDER BY name").unwrap();
         stmt.query_map([], |row| {
             let perms_json: String = row.get(1)?;
             let permissions: Vec<String> = serde_json::from_str(&perms_json).unwrap_or_default();
             Ok(RoleInfo {
                 name: row.get(0)?,
                 permissions,
+                disk_quota_mb: row.get::<_, i64>(2).unwrap_or(0),
             })
         }).unwrap().filter_map(|r| r.ok()).collect()
     }
@@ -1130,6 +1159,144 @@ impl Db {
             params![channel],
             |row| row.get::<_, i32>(0),
         ).unwrap_or(1)
+    }
+
+    // ── File Management (quotas, pinning) ─────────────────────────
+
+    pub fn get_user_disk_usage(&self, username: &str) -> i64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(size), 0) FROM files WHERE uploader = ?1",
+            params![username],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_or(0)
+    }
+
+    pub fn get_user_quota(&self, username: &str) -> i64 {
+        let conn = self.conn.lock().unwrap();
+        // Get max disk_quota_mb across user's roles; 0 = unlimited
+        let quota_mb: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(r.disk_quota_mb), 0) FROM roles r
+             INNER JOIN user_roles ur ON ur.role_name = r.name
+             WHERE ur.username = ?1",
+            params![username],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_or(0);
+        if quota_mb == 0 { 0 } else { quota_mb * 1024 * 1024 }
+    }
+
+    pub fn list_user_files(&self, username: &str) -> Vec<UserFileInfo> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, filename, size, mime_type, channel, created_at, pinned FROM files
+             WHERE uploader = ?1 ORDER BY created_at DESC"
+        ).unwrap();
+        stmt.query_map(params![username], |row| {
+            Ok(UserFileInfo {
+                id: row.get(0)?,
+                filename: row.get(1)?,
+                size: row.get(2)?,
+                mime_type: row.get(3)?,
+                channel: row.get(4)?,
+                created_at: row.get(5)?,
+                pinned: row.get::<_, i32>(6).unwrap_or(0) != 0,
+            })
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn set_file_pinned(&self, file_id: &str, pinned: bool) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE files SET pinned = ?2 WHERE id = ?1",
+            params![file_id, pinned as i32],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 { return Err("File not found".into()); }
+        Ok(())
+    }
+
+    pub fn get_file_owner(&self, file_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT uploader FROM files WHERE id = ?1",
+            params![file_id],
+            |row| row.get::<_, String>(0),
+        ).ok()
+    }
+
+    pub fn delete_file_record(&self, file_id: &str) -> Option<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        // Get filename extension for disk cleanup
+        let info: Option<(String, String)> = conn.query_row(
+            "SELECT id, filename FROM files WHERE id = ?1",
+            params![file_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).ok();
+        if info.is_some() {
+            let _ = conn.execute("DELETE FROM files WHERE id = ?1", params![file_id]);
+        }
+        info
+    }
+
+    pub fn get_released_files_for_user(&self, username: &str) -> Vec<(String, String, i64)> {
+        // Returns (file_id, filename, size) of unpinned files, oldest first
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, filename, size FROM files WHERE uploader = ?1 AND pinned = 0 ORDER BY created_at ASC"
+        ).unwrap();
+        stmt.query_map(params![username], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        }).unwrap().filter_map(|r| r.ok()).collect()
+    }
+
+    // ── Search ──────────────────────────────────────────────────────
+
+    pub fn search_messages(&self, query: &str, channel: Option<&str>, limit: u32) -> Vec<SearchResult> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let pattern = format!("%{}%", query);
+        if let Some(ch) = channel {
+            let mut stmt = conn.prepare(
+                "SELECT id, channel, author, content, timestamp FROM messages
+                 WHERE channel = ?1 AND content LIKE ?2 AND encrypted = 0
+                   AND (expires_at IS NULL OR expires_at > ?3)
+                 ORDER BY timestamp DESC LIMIT ?4"
+            ).unwrap();
+            stmt.query_map(params![ch, pattern, now, limit], |row| {
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    channel: row.get(1)?,
+                    author: row.get(2)?,
+                    content: row.get(3)?,
+                    timestamp: row.get(4)?,
+                })
+            }).unwrap().filter_map(|r| r.ok()).collect()
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, channel, author, content, timestamp FROM messages
+                 WHERE content LIKE ?1 AND encrypted = 0
+                   AND (expires_at IS NULL OR expires_at > ?2)
+                 ORDER BY timestamp DESC LIMIT ?3"
+            ).unwrap();
+            stmt.query_map(params![pattern, now, limit], |row| {
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    channel: row.get(1)?,
+                    author: row.get(2)?,
+                    content: row.get(3)?,
+                    timestamp: row.get(4)?,
+                })
+            }).unwrap().filter_map(|r| r.ok()).collect()
+        }
+    }
+
+    pub fn update_role_quota(&self, name: &str, disk_quota_mb: i64) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE roles SET disk_quota_mb = ?2 WHERE name = ?1",
+            params![name, disk_quota_mb],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 { return Err("Role not found".into()); }
+        Ok(())
     }
 
     // ── Private helpers ─────────────────────────────────────────────

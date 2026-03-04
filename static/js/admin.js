@@ -118,9 +118,11 @@ export function renderAdminRoles(roles) {
   let html = '';
 
   for (const role of roles) {
+    const quotaLabel = role.disk_quota_mb ? `${role.disk_quota_mb} MB` : 'unlimited';
     html += `<div class="role-item">
       <div class="role-item-header">
         <span class="role-item-name">${escapeHtml(role.name)}</span>
+        <span class="role-item-perms">Quota: ${quotaLabel}</span>
       </div>
       <div class="role-item-perms">${role.permissions.join(', ') || 'none'}</div>
     </div>`;
