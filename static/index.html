@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gathering</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
+    --text: #c9d1d9; --text2: #8b949e; --accent: #58a6ff; --accent2: #1f6feb;
+    --green: #3fb950; --red: #f85149; --orange: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+         background: var(--bg); color: var(--text); height: 100vh; display: flex; }
+
+  /* ── Auth screen ─── */
+  #auth-screen { display: flex; align-items: center; justify-content: center;
+                  width: 100%; height: 100%; }
+  .auth-box { background: var(--bg2); border: 1px solid var(--border);
+              border-radius: 8px; padding: 2rem; width: 340px; }
+  .auth-box h1 { font-size: 1.4rem; margin-bottom: 0.3rem; color: var(--accent); }
+  .auth-box p { font-size: 0.8rem; color: var(--text2); margin-bottom: 1.5rem; }
+  .auth-box input { width: 100%; padding: 0.5rem 0.7rem; margin-bottom: 0.7rem;
+                    background: var(--bg); border: 1px solid var(--border);
+                    border-radius: 4px; color: var(--text); font-family: inherit;
+                    font-size: 0.85rem; }
+  .auth-box input:focus { outline: none; border-color: var(--accent); }
+  .auth-buttons { display: flex; gap: 0.5rem; }
+  .auth-buttons button { flex: 1; padding: 0.5rem; border: none; border-radius: 4px;
+                         font-family: inherit; font-size: 0.85rem; cursor: pointer; }
+  .btn-primary { background: var(--accent2); color: #fff; }
+  .btn-secondary { background: var(--bg3); color: var(--text); }
+  .btn-primary:hover { background: var(--accent); }
+  .btn-secondary:hover { background: var(--border); }
+  .auth-error { color: var(--red); font-size: 0.8rem; margin-bottom: 0.5rem;
+                min-height: 1.2rem; }
+
+  /* ── Chat layout ─── */
+  #chat-screen { display: none; width: 100%; height: 100%; }
+  .layout { display: flex; height: 100%; width: 100%; }
+
+  /* Sidebar */
+  .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border);
+             display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-header { padding: 1rem; border-bottom: 1px solid var(--border); }
+  .sidebar-header h2 { font-size: 1rem; color: var(--accent); }
+  .sidebar-header .user-info { font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem; }
+  .sidebar-section { padding: 0.5rem 0; }
+  .sidebar-section h3 { font-size: 0.7rem; text-transform: uppercase; color: var(--text2);
+                        padding: 0.3rem 1rem; letter-spacing: 0.05em; }
+  .channel-item { padding: 0.35rem 1rem; font-size: 0.85rem; cursor: pointer;
+                  display: flex; justify-content: space-between; align-items: center; }
+  .channel-item:hover { background: var(--bg3); }
+  .channel-item.active { background: var(--bg3); color: var(--accent); }
+  .channel-item .count { font-size: 0.7rem; color: var(--text2); }
+  .user-item { padding: 0.25rem 1rem; font-size: 0.8rem; color: var(--text2); }
+  .user-item::before { content: '●'; color: var(--green); margin-right: 0.4rem;
+                       font-size: 0.6rem; }
+  .join-channel { padding: 0.5rem 1rem; }
+  .join-channel input { width: 100%; padding: 0.3rem 0.5rem; background: var(--bg);
+                       border: 1px solid var(--border); border-radius: 3px;
+                       color: var(--text); font-family: inherit; font-size: 0.8rem; }
+  .join-channel input:focus { outline: none; border-color: var(--accent); }
+
+  .sidebar-bottom { margin-top: auto; padding: 0.7rem 1rem; border-top: 1px solid var(--border);
+                   font-size: 0.7rem; color: var(--text2); }
+
+  /* Main chat area */
+  .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .chat-header { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border);
+                 display: flex; align-items: center; gap: 0.5rem; }
+  .chat-header h2 { font-size: 0.95rem; }
+  .chat-header .typing { font-size: 0.75rem; color: var(--text2); font-style: italic; }
+
+  .messages { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; display: flex;
+              flex-direction: column; gap: 0.15rem; }
+  .msg { padding: 0.3rem 0; line-height: 1.4; }
+  .msg .meta { font-size: 0.75rem; }
+  .msg .author { color: var(--accent); font-weight: 600; }
+  .msg .time { color: var(--text2); margin-left: 0.4rem; font-size: 0.7rem; }
+  .msg .ttl { color: var(--orange); margin-left: 0.3rem; font-size: 0.65rem; }
+  .msg .body { margin-top: 0.1rem; font-size: 0.85rem; word-wrap: break-word; }
+  .msg.system { color: var(--text2); font-style: italic; font-size: 0.8rem; }
+
+  .input-area { padding: 0.7rem 1rem; border-top: 1px solid var(--border);
+                display: flex; gap: 0.5rem; align-items: flex-end; }
+  .input-area textarea { flex: 1; resize: none; padding: 0.5rem 0.7rem;
+                        background: var(--bg2); border: 1px solid var(--border);
+                        border-radius: 6px; color: var(--text); font-family: inherit;
+                        font-size: 0.85rem; max-height: 120px; min-height: 38px;
+                        line-height: 1.4; }
+  .input-area textarea:focus { outline: none; border-color: var(--accent); }
+  .ttl-control { display: flex; align-items: center; gap: 0.3rem; }
+  .ttl-control label { font-size: 0.7rem; color: var(--text2); white-space: nowrap; }
+  .ttl-control select { background: var(--bg2); border: 1px solid var(--border);
+                       color: var(--text); font-family: inherit; font-size: 0.75rem;
+                       padding: 0.2rem; border-radius: 3px; }
+  .send-btn { padding: 0.5rem 1rem; background: var(--accent2); color: #fff; border: none;
+              border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.85rem; }
+  .send-btn:hover { background: var(--accent); }
+
+  /* ── Voice section ─── */
+  .voice-section { border-top: 1px solid var(--border); padding: 0.5rem 0; }
+  .voice-section h3 { font-size: 0.7rem; text-transform: uppercase; color: var(--text2);
+                      padding: 0.3rem 1rem; letter-spacing: 0.05em; }
+  .voice-status { padding: 0.2rem 1rem; font-size: 0.75rem; color: var(--text2); }
+  .voice-member { padding: 0.2rem 1rem; font-size: 0.8rem; color: var(--text2);
+                  display: flex; align-items: center; gap: 0.4rem; }
+  .voice-member .voice-dot { width: 8px; height: 8px; border-radius: 50%;
+                             background: var(--text2); display: inline-block; flex-shrink: 0; }
+  .voice-member.speaking .voice-dot { background: var(--green); box-shadow: 0 0 4px var(--green); }
+  .voice-member.muted .voice-name { color: var(--text2); opacity: 0.6; }
+  .voice-member.muted .voice-dot { background: var(--red); }
+  .voice-btn { margin: 0.4rem 1rem; padding: 0.35rem 0.6rem; border: none; border-radius: 4px;
+               font-family: inherit; font-size: 0.75rem; cursor: pointer; }
+  .voice-join { background: var(--green); color: #000; }
+  .voice-join:hover { opacity: 0.85; }
+  .voice-leave { background: var(--red); color: #fff; }
+  .voice-leave:hover { opacity: 0.85; }
+  .voice-controls { display: flex; gap: 0.3rem; padding: 0.2rem 1rem; }
+  .voice-controls button { padding: 0.25rem 0.5rem; border: 1px solid var(--border);
+                          border-radius: 4px; background: var(--bg3); color: var(--text);
+                          font-family: inherit; font-size: 0.7rem; cursor: pointer; }
+  .voice-controls button.active { background: var(--red); color: #fff; border-color: var(--red); }
+  .voice-controls button:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- Auth Screen -->
+<div id="auth-screen">
+  <div class="auth-box">
+    <h1>⌁ Gathering</h1>
+    <p>self-hosted · encrypted · ephemeral</p>
+    <div class="auth-error" id="auth-error"></div>
+    <input type="text" id="username" placeholder="username" autocomplete="username">
+    <input type="password" id="password" placeholder="password" autocomplete="current-password">
+    <div class="auth-buttons">
+      <button class="btn-primary" onclick="doLogin()">Login</button>
+      <button class="btn-secondary" onclick="doRegister()">Register</button>
+    </div>
+  </div>
+</div>
+
+<!-- Chat Screen -->
+<div id="chat-screen">
+  <div class="layout">
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2>⌁ Gathering</h2>
+        <div class="user-info">logged in as <strong id="display-user"></strong></div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Channels</h3>
+        <div id="channel-list"></div>
+        <div class="join-channel">
+          <input type="text" id="new-channel" placeholder="join or create #channel"
+                 onkeydown="if(event.key==='Enter')joinChannel()">
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Online</h3>
+        <div id="online-users"></div>
+      </div>
+      <div class="voice-section">
+        <h3>Voice</h3>
+        <div class="voice-status" id="voice-status">Not connected</div>
+        <div id="voice-members"></div>
+        <div class="voice-controls" id="voice-controls" style="display:none;">
+          <button id="mute-btn" onclick="toggleMute()">Mute</button>
+          <button id="deafen-btn" onclick="toggleDeafen()">Deafen</button>
+        </div>
+        <button class="voice-btn voice-join" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
+        <button class="voice-btn voice-leave" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
+      </div>
+      <div class="sidebar-bottom">
+        Messages are encrypted in transit.<br>
+        Set TTL to auto-delete messages.
+      </div>
+    </div>
+    <div class="chat-main">
+      <div class="chat-header">
+        <h2 id="chat-channel-name">#general</h2>
+        <span class="typing" id="typing-indicator"></span>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="input-area">
+        <textarea id="msg-input" rows="1" placeholder="Type a message..."
+                  onkeydown="handleInputKey(event)"></textarea>
+        <div class="ttl-control">
+          <label>TTL</label>
+          <select id="ttl-select">
+            <option value="">∞</option>
+            <option value="60">1m</option>
+            <option value="300">5m</option>
+            <option value="3600">1h</option>
+            <option value="86400">1d</option>
+            <option value="604800">7d</option>
+          </select>
+        </div>
+        <button class="send-btn" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────
+let ws = null;
+let token = localStorage.getItem('gathering_token');
+let currentUser = '';
+let currentChannel = 'general';
+let channels = [];
+let typingTimers = {};
+
+// ── Auth ────────────────────────────────────────────────────────────
+async function doAuth(endpoint) {
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const errEl = document.getElementById('auth-error');
+  errEl.textContent = '';
+
+  if (!username || !password) { errEl.textContent = 'Fill in both fields'; return; }
+
+  try {
+    const res = await fetch(`/api/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (data.ok && data.token) {
+      token = data.token;
+      localStorage.setItem('gathering_token', token);
+      connectWS();
+    } else {
+      errEl.textContent = data.error || 'Auth failed';
+    }
+  } catch (e) {
+    errEl.textContent = 'Connection error';
+  }
+}
+function doLogin() { doAuth('login'); }
+function doRegister() { doAuth('register'); }
+
+// ── WebSocket ───────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'Auth', token }));
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleServerMsg(msg);
+  };
+
+  ws.onclose = () => {
+    // Clean up voice state
+    if (inVoiceChannel) cleanupVoice();
+    // Reconnect after delay
+    setTimeout(() => { if (token) connectWS(); }, 3000);
+  };
+}
+
+function handleServerMsg(msg) {
+  switch (msg.type) {
+    case 'AuthResult':
+      if (msg.ok) {
+        currentUser = msg.username;
+        document.getElementById('auth-screen').style.display = 'none';
+        document.getElementById('chat-screen').style.display = 'block';
+        document.getElementById('display-user').textContent = currentUser;
+      } else {
+        document.getElementById('auth-error').textContent = msg.error || 'Auth failed';
+        token = null;
+        localStorage.removeItem('gathering_token');
+        document.getElementById('auth-screen').style.display = 'flex';
+      }
+      break;
+
+    case 'Message':
+      appendMessage(msg);
+      break;
+
+    case 'History':
+      if (msg.channel === currentChannel) {
+        const el = document.getElementById('messages');
+        el.innerHTML = '';
+        msg.messages.forEach(m => appendMessage({ ...m, channel: msg.channel }));
+      }
+      break;
+
+    case 'ChannelList':
+      channels = msg.channels;
+      renderChannels();
+      break;
+
+    case 'OnlineUsers':
+      renderOnlineUsers(msg.users);
+      break;
+
+    case 'UserJoined':
+      if (msg.channel === currentChannel) {
+        appendSystem(`${msg.username} joined`);
+      }
+      break;
+
+    case 'UserLeft':
+      if (msg.channel === currentChannel) {
+        appendSystem(`${msg.username} left`);
+      }
+      break;
+
+    case 'UserTyping':
+      if (msg.channel === currentChannel) {
+        showTyping(msg.username);
+      }
+      break;
+
+    case 'System':
+      appendSystem(msg.content);
+      break;
+
+    case 'Error':
+      appendSystem(`Error: ${msg.message}`);
+      break;
+
+    case 'VoiceMembers':
+      voiceMembers = msg.users;
+      renderVoiceMembers();
+      // Create peer connections to existing members (joiner sends offers)
+      msg.users.forEach(user => {
+        if (user !== currentUser && !peerConnections[user]) {
+          createPeerConnection(user, true);
+        }
+      });
+      break;
+
+    case 'VoiceUserJoined':
+      if (!voiceMembers.includes(msg.username)) voiceMembers.push(msg.username);
+      renderVoiceMembers();
+      // Don't create PC here — the joiner will send us an offer
+      break;
+
+    case 'VoiceUserLeft':
+      voiceMembers = voiceMembers.filter(u => u !== msg.username);
+      renderVoiceMembers();
+      if (peerConnections[msg.username]) {
+        peerConnections[msg.username].close();
+        delete peerConnections[msg.username];
+      }
+      if (remoteAnalysers[msg.username]) {
+        clearInterval(remoteAnalysers[msg.username].interval);
+        delete remoteAnalysers[msg.username];
+      }
+      const audioEl = document.getElementById('audio-' + msg.username);
+      if (audioEl) audioEl.remove();
+      break;
+
+    case 'VoiceSignal':
+      handleVoiceSignal(msg.from_user, msg.signal_data);
+      break;
+  }
+}
+
+// ── Rendering ───────────────────────────────────────────────────────
+function appendMessage(msg) {
+  if (msg.channel && msg.channel !== currentChannel) return;
+
+  const el = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg';
+
+  const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  let ttlHtml = '';
+  if (msg.expires_at) {
+    const exp = new Date(msg.expires_at);
+    const remaining = Math.max(0, Math.round((exp - Date.now()) / 1000));
+    if (remaining < 60) ttlHtml = `<span class="ttl">[${remaining}s]</span>`;
+    else if (remaining < 3600) ttlHtml = `<span class="ttl">[${Math.round(remaining/60)}m]</span>`;
+    else if (remaining < 86400) ttlHtml = `<span class="ttl">[${Math.round(remaining/3600)}h]</span>`;
+    else ttlHtml = `<span class="ttl">[${Math.round(remaining/86400)}d]</span>`;
+  }
+
+  // Basic formatting: **bold**, *italic*, `code`, ```code blocks```
+  let content = escapeHtml(msg.content);
+  content = content.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+  content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+  content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  div.innerHTML = `
+    <div class="meta">
+      <span class="author">${escapeHtml(msg.author)}</span>
+      <span class="time">${time}</span>${ttlHtml}
+    </div>
+    <div class="body">${content}</div>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendSystem(text) {
+  const el = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg system';
+  div.textContent = text;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderChannels() {
+  const el = document.getElementById('channel-list');
+  el.innerHTML = channels.map(ch => `
+    <div class="channel-item ${ch.name === currentChannel ? 'active' : ''}"
+         onclick="switchChannel('${ch.name}')">
+      <span>#${escapeHtml(ch.name)}</span>
+      <span class="count">${ch.user_count}</span>
+    </div>
+  `).join('');
+}
+
+function renderOnlineUsers(users) {
+  const el = document.getElementById('online-users');
+  el.innerHTML = users.map(u =>
+    `<div class="user-item">${escapeHtml(u)}</div>`
+  ).join('');
+}
+
+function showTyping(username) {
+  const el = document.getElementById('typing-indicator');
+  el.textContent = `${username} is typing...`;
+  clearTimeout(typingTimers[username]);
+  typingTimers[username] = setTimeout(() => {
+    el.textContent = '';
+  }, 3000);
+}
+
+// ── Actions ─────────────────────────────────────────────────────────
+function switchChannel(name) {
+  currentChannel = name;
+  document.getElementById('chat-channel-name').textContent = `#${name}`;
+  document.getElementById('messages').innerHTML = '';
+  renderChannels();
+  ws.send(JSON.stringify({ type: 'History', channel: name, limit: 100 }));
+}
+
+function joinChannel() {
+  const input = document.getElementById('new-channel');
+  let name = input.value.trim().replace(/^#/, '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!name) return;
+  input.value = '';
+  ws.send(JSON.stringify({ type: 'Join', channel: name }));
+  currentChannel = name;
+  document.getElementById('chat-channel-name').textContent = `#${name}`;
+  document.getElementById('messages').innerHTML = '';
+}
+
+function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const content = input.value.trim();
+  if (!content) return;
+
+  const ttlSelect = document.getElementById('ttl-select');
+  const ttl = ttlSelect.value ? parseInt(ttlSelect.value) : null;
+
+  ws.send(JSON.stringify({
+    type: 'Send',
+    channel: currentChannel,
+    content,
+    ttl_secs: ttl,
+  }));
+  input.value = '';
+  input.style.height = 'auto';
+}
+
+let lastTypingSent = 0;
+function handleInputKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+    return;
+  }
+  // Auto-resize textarea
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+
+  // Typing indicator (throttled)
+  const now = Date.now();
+  if (now - lastTypingSent > 2000) {
+    lastTypingSent = now;
+    ws.send(JSON.stringify({ type: 'Typing', channel: currentChannel }));
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Voice state ─────────────────────────────────────────────────────
+let inVoiceChannel = false;
+let voiceChannel = '';
+let voiceMembers = [];
+let peerConnections = {};
+let localStream = null;
+let isMuted = false;
+let isDeafened = false;
+let localAnalyser = null;
+let localAnalyserInterval = null;
+let remoteAnalysers = {};
+const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+
+function joinVoice() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    appendSystem('Voice requires a secure connection (HTTPS). Connect via https:// or localhost.');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
+    localStream = stream;
+    inVoiceChannel = true;
+    voiceChannel = currentChannel;
+    ws.send(JSON.stringify({ type: 'VoiceJoin', channel: currentChannel }));
+    document.getElementById('voice-join-btn').style.display = 'none';
+    document.getElementById('voice-leave-btn').style.display = '';
+    document.getElementById('voice-controls').style.display = '';
+    document.getElementById('voice-status').textContent = 'Connected to #' + currentChannel;
+    startLocalSpeakingDetection();
+  }).catch(err => {
+    appendSystem('Microphone access denied: ' + err.message);
+  });
+}
+
+function leaveVoice() {
+  if (!inVoiceChannel) return;
+  ws.send(JSON.stringify({ type: 'VoiceLeave', channel: voiceChannel }));
+  cleanupVoice();
+}
+
+function cleanupVoice() {
+  for (const user in peerConnections) {
+    peerConnections[user].close();
+    if (remoteAnalysers[user]) {
+      clearInterval(remoteAnalysers[user].interval);
+      delete remoteAnalysers[user];
+    }
+  }
+  peerConnections = {};
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+  if (localAnalyserInterval) { clearInterval(localAnalyserInterval); localAnalyserInterval = null; }
+  localAnalyser = null;
+  inVoiceChannel = false;
+  voiceChannel = '';
+  voiceMembers = [];
+  isMuted = false;
+  isDeafened = false;
+  document.getElementById('voice-join-btn').style.display = '';
+  document.getElementById('voice-leave-btn').style.display = 'none';
+  document.getElementById('voice-controls').style.display = 'none';
+  document.getElementById('voice-status').textContent = 'Not connected';
+  document.getElementById('voice-members').innerHTML = '';
+  document.getElementById('mute-btn').classList.remove('active');
+  document.getElementById('mute-btn').textContent = 'Mute';
+  document.getElementById('deafen-btn').classList.remove('active');
+  document.getElementById('deafen-btn').textContent = 'Deafen';
+  // Remove any remote audio elements
+  document.querySelectorAll('audio.voice-remote').forEach(el => el.remove());
+}
+
+function createPeerConnection(targetUser, isInitiator) {
+  const pc = new RTCPeerConnection(rtcConfig);
+  peerConnections[targetUser] = pc;
+
+  // Add local tracks
+  if (localStream) {
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+  }
+
+  // Handle ICE candidates
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({
+        type: 'VoiceSignal',
+        target_user: targetUser,
+        signal_data: { type: 'ice-candidate', candidate: e.candidate }
+      }));
+    }
+  };
+
+  // Handle remote tracks
+  pc.ontrack = (e) => {
+    let audio = document.getElementById('audio-' + targetUser);
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = 'audio-' + targetUser;
+      audio.className = 'voice-remote';
+      audio.autoplay = true;
+      document.body.appendChild(audio);
+    }
+    audio.srcObject = e.streams[0];
+    if (isDeafened) audio.muted = true;
+    startRemoteSpeakingDetection(targetUser, e.streams[0]);
+  };
+
+  if (isInitiator) {
+    pc.createOffer().then(offer => {
+      return pc.setLocalDescription(offer);
+    }).then(() => {
+      ws.send(JSON.stringify({
+        type: 'VoiceSignal',
+        target_user: targetUser,
+        signal_data: { type: 'offer', sdp: pc.localDescription }
+      }));
+    });
+  }
+
+  return pc;
+}
+
+function handleVoiceSignal(fromUser, signalData) {
+  if (signalData.type === 'offer') {
+    const pc = createPeerConnection(fromUser, false);
+    pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp)).then(() => {
+      return pc.createAnswer();
+    }).then(answer => {
+      return pc.setLocalDescription(answer);
+    }).then(() => {
+      ws.send(JSON.stringify({
+        type: 'VoiceSignal',
+        target_user: fromUser,
+        signal_data: { type: 'answer', sdp: pc.localDescription }
+      }));
+    });
+  } else if (signalData.type === 'answer') {
+    if (peerConnections[fromUser]) {
+      peerConnections[fromUser].setRemoteDescription(new RTCSessionDescription(signalData.sdp));
+    }
+  } else if (signalData.type === 'ice-candidate') {
+    if (peerConnections[fromUser]) {
+      peerConnections[fromUser].addIceCandidate(new RTCIceCandidate(signalData.candidate));
+    }
+  }
+}
+
+function renderVoiceMembers() {
+  const el = document.getElementById('voice-members');
+  el.innerHTML = voiceMembers.map(u =>
+    `<div class="voice-member" id="voice-member-${u}">` +
+    `<span class="voice-dot"></span>` +
+    `<span class="voice-name">${escapeHtml(u)}</span></div>`
+  ).join('');
+}
+
+// ── Mute / Deafen ───────────────────────────────────────────────────
+function toggleMute() {
+  isMuted = !isMuted;
+  if (localStream) {
+    localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+  }
+  const btn = document.getElementById('mute-btn');
+  btn.classList.toggle('active', isMuted);
+  btn.textContent = isMuted ? 'Unmute' : 'Mute';
+  // Update own speaking indicator
+  const myEl = document.getElementById('voice-member-' + currentUser);
+  if (myEl) myEl.classList.toggle('muted', isMuted);
+}
+
+function toggleDeafen() {
+  isDeafened = !isDeafened;
+  // Mute all remote audio
+  document.querySelectorAll('audio.voice-remote').forEach(el => el.muted = isDeafened);
+  const btn = document.getElementById('deafen-btn');
+  btn.classList.toggle('active', isDeafened);
+  btn.textContent = isDeafened ? 'Undeafen' : 'Deafen';
+  // Auto-mute when deafening
+  if (isDeafened && !isMuted) toggleMute();
+}
+
+// ── Speaking detection ──────────────────────────────────────────────
+function startLocalSpeakingDetection() {
+  try {
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(localStream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    localAnalyser = analyser;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    localAnalyserInterval = setInterval(() => {
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      const el = document.getElementById('voice-member-' + currentUser);
+      if (el) el.classList.toggle('speaking', avg > 15 && !isMuted);
+    }, 100);
+  } catch(e) {}
+}
+
+function startRemoteSpeakingDetection(user, stream) {
+  try {
+    if (remoteAnalysers[user]) { clearInterval(remoteAnalysers[user].interval); }
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const interval = setInterval(() => {
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      const el = document.getElementById('voice-member-' + user);
+      if (el) el.classList.toggle('speaking', avg > 15);
+    }, 100);
+    remoteAnalysers[user] = { analyser, interval };
+  } catch(e) {}
+}
+
+// ── Auto-connect if token exists ────────────────────────────────────
+if (token) connectWS();
+</script>
+</body>
+</html>
