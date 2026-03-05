@@ -1,6 +1,6 @@
 // chat-ui.js — Message rendering, channel list, online users, DMs, typing
 
-import state, { isDMChannel } from './state.js';
+import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime, renderAttachmentsHtml, decryptAndRenderAttachments, renderTtlBadge, renderEncryptedBadge } from './render.js';
 import { tryDecrypt } from './crypto.js';
@@ -390,6 +390,9 @@ export function switchChannel(name) {
   // Always send Join — server is idempotent (skips broadcast if already joined)
   // and responds with history + channel key delivery
   send('Join', { channel: name });
+  // Emit after Join so the server has registered us in the channel
+  // before widget presence requests are sent
+  emit('channel-switched', name);
   if (state.encryptedChannels.has(name) && !state.channelKeys[name] && state.e2eReady) {
     send('RequestChannelKey', { channel: name });
   }

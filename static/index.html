@@ -102,6 +102,10 @@
         <button class="request-key-btn" id="request-key-btn" onclick="requestChannelKey()" style="display:none;" title="Request encryption key for this channel">Request Key</button>
         <button class="search-toggle-btn" onclick="openChannelSettings()" title="Channel Settings">&#x2699;</button>
         <button class="search-toggle-btn" onclick="toggleSearch()" title="Search">&#x1F50D;</button>
+        <div style="position:relative;">
+          <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets">&#x29C8;</button>
+          <div class="widget-picker" id="widget-picker" style="display:none;"></div>
+        </div>
         <div class="view-toggle">
           <button id="view-chat-btn" class="active" onclick="switchView('chat')">Chat</button>
           <button id="view-topics-btn" onclick="switchView('topics')">Topics</button>
@@ -114,6 +118,9 @@
         <button class="admin-btn-sm" onclick="closeSearch()" style="background:var(--bg3);color:var(--text2);">&times;</button>
       </div>
       <div class="search-results" id="search-results" style="display:none;"></div>
+
+      <!-- Widget panel -->
+      <div class="widget-panel" id="widget-panel" style="display:none;"></div>
 
       <!-- Video area (shown when in any voice channel) -->
       <div id="video-area" style="display:none;">

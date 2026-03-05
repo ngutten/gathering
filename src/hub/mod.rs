@@ -7,6 +7,7 @@ mod files;
 mod messages;
 mod topics;
 mod voice;
+mod widgets;
 
 use axum::extract::ws::Message;
 use std::collections::{HashMap, HashSet};
@@ -399,6 +400,10 @@ impl Hub {
 
             ClientMsg::ListDMs => {
                 self.handle_list_dms(id).await;
+            }
+
+            ClientMsg::WidgetMessage { channel, widget_id, action, data } => {
+                self.handle_widget_message(id, channel, widget_id, action, data).await;
             }
         }
     }

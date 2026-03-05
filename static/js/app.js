@@ -13,6 +13,18 @@ import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest }
 import { toggleEmojiPicker } from './emoji.js';
 import { openFileManager, closeFileManager, toggleFilePin, deleteUserFile, downloadFile } from './files.js';
 import { toggleSearch, closeSearch, executeSearch, scrollToMessage } from './search.js';
+import { toggleWidgetPicker, toggleWidget, deactivateWidget, getActiveWidgets, onChannelSwitch as widgetChannelSwitch } from './widgets/widget-api.js';
+import { send } from './transport.js';
+// Import widgets to register them
+import './widgets/dice-roller.js';
+import './widgets/initiative.js';
+import './widgets/radio.js';
+// Expose helpers for widgets
+window._widgetTransport = { send };
+window._getActiveWidgets = getActiveWidgets;
+import { diceRoll, diceRollQuick } from './widgets/dice-roller.js';
+import { initiativeAdd, initiativeRemove, initiativeNext, initiativeClear } from './widgets/initiative.js';
+import { radioTogglePlay, radioNext, radioPrev, radioStop, radioBecameDJ, radioSetVolume, radioSeek, radioToggleDir, radioPlayDir, radioPlayFile, radioSwitchBrowse, radioPickTopicChannel, radioLoadTopicFiles, radioClearTopicFiles, radioPlayTopicFiles } from './widgets/radio.js';
 
 // ── Wire event emitter ──
 on('server-message', handleServerMsg);
@@ -20,6 +32,7 @@ on('system-message', appendSystem);
 on('ws-closed', () => {
   if (state.inVoiceChannel) cleanupVoice();
 });
+on('channel-switched', widgetChannelSwitch);
 
 // ── Expose functions to window for inline onclick handlers ──
 window.doLogin = doLogin;
@@ -89,6 +102,30 @@ window.toggleChannelRestricted = toggleChannelRestricted;
 window.addChannelMember = addChannelMember;
 window.removeChannelMember = removeChannelMember;
 window.requestChannelKey = requestChannelKey;
+window.toggleWidgetPicker = toggleWidgetPicker;
+window.toggleWidget = (widgetId) => toggleWidget(state.currentChannel, widgetId);
+window.deactivateCurrentWidget = (widgetId) => deactivateWidget(state.currentChannel, widgetId);
+window.diceRoll = diceRoll;
+window.diceRollQuick = diceRollQuick;
+window.initiativeAdd = initiativeAdd;
+window.initiativeRemove = initiativeRemove;
+window.initiativeNext = initiativeNext;
+window.initiativeClear = initiativeClear;
+window.radioTogglePlay = radioTogglePlay;
+window.radioNext = radioNext;
+window.radioPrev = radioPrev;
+window.radioStop = radioStop;
+window.radioBecameDJ = radioBecameDJ;
+window.radioSetVolume = radioSetVolume;
+window.radioSeek = radioSeek;
+window.radioToggleDir = radioToggleDir;
+window.radioPlayDir = radioPlayDir;
+window.radioPlayFile = radioPlayFile;
+window.radioSwitchBrowse = radioSwitchBrowse;
+window.radioPickTopicChannel = radioPickTopicChannel;
+window.radioLoadTopicFiles = radioLoadTopicFiles;
+window.radioClearTopicFiles = radioClearTopicFiles;
+window.radioPlayTopicFiles = radioPlayTopicFiles;
 
 // ── Initialize ──
 checkServerInfo();

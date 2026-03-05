@@ -77,6 +77,7 @@ async fn main() {
         .unwrap_or_else(|_| PathBuf::from("gathering-data"));
     std::fs::create_dir_all(&data_dir).expect("Failed to create data directory");
     std::fs::create_dir_all(data_dir.join("uploads")).ok();
+    std::fs::create_dir_all(data_dir.join("music")).ok();
 
     let db_path = data_dir.join("gathering.db");
     tracing::info!("Database: {:?}", db_path);
@@ -166,6 +167,8 @@ async fn main() {
         .route("/api/server-info", get(handle_server_info))
         .route("/api/upload", post(handle_upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)))
         .route("/api/files/:id", get(handle_download))
+        .route("/api/music", get(handle_music_list))
+        .route("/api/music/*path", get(handle_music_download))
         .route("/ws", get(ws_upgrade))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::new()) // S3: same-origin only (no permissive CORS)
@@ -663,6 +666,187 @@ fn mime_from_ext(ext: &str) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+// ── Music library ───────────────────────────────────────────────────
+
+const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus", "wma", "webm"];
+
+#[derive(Debug, serde::Serialize)]
+struct MusicNode {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    children: Option<Vec<MusicNode>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+}
+
+fn scan_music_dir(base: &std::path::Path, dir: &std::path::Path) -> Vec<MusicNode> {
+    let mut nodes = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return nodes,
+    };
+    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip hidden files/dirs
+        if name.starts_with('.') { continue; }
+
+        if ft.is_dir() {
+            let children = scan_music_dir(base, &entry.path());
+            if !children.is_empty() {
+                nodes.push(MusicNode {
+                    name,
+                    children: Some(children),
+                    path: None,
+                    mime: None,
+                    size: None,
+                });
+            }
+        } else if ft.is_file() {
+            let ext = std::path::Path::new(&name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+                let rel_path = entry.path().strip_prefix(base)
+                    .unwrap_or(&entry.path())
+                    .to_string_lossy()
+                    .to_string();
+                let size = entry.metadata().ok().map(|m| m.len());
+                nodes.push(MusicNode {
+                    name,
+                    children: None,
+                    path: Some(rel_path),
+                    mime: Some(mime_from_ext(&ext)),
+                    size,
+                });
+            }
+        }
+    }
+    nodes
+}
+
+async fn handle_music_list(
+    Extension(state): Extension<Arc<AppState>>,
+    headers: http::HeaderMap,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Auth check
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    match token.as_deref().and_then(|t| state.db.validate_token(t)) {
+        Some(_) => {}
+        None => return Err(StatusCode::UNAUTHORIZED),
+    }
+
+    let music_dir = state.data_dir.join("music");
+    let tree = scan_music_dir(&music_dir, &music_dir);
+    Ok(Json(tree))
+}
+
+async fn handle_music_download(
+    Extension(state): Extension<Arc<AppState>>,
+    headers: http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
+    AxumPath(path): AxumPath<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Auth check (Bearer or ?token=)
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| query.get("token").cloned());
+
+    match token.as_deref().and_then(|t| state.db.validate_token(t)) {
+        Some(_) => {}
+        None => return Err(StatusCode::UNAUTHORIZED),
+    }
+
+    // Sanitize path — no ".." or absolute paths
+    if path.contains("..") || path.starts_with('/') {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let file_path = state.data_dir.join("music").join(&path);
+    if !file_path.exists() || !file_path.is_file() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Verify it's still under the music directory (prevent symlink escape)
+    let canonical = file_path.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
+    let music_canonical = state.data_dir.join("music").canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
+    if !canonical.starts_with(&music_canonical) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let data = tokio::fs::read(&file_path).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    let total = data.len();
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+    let mime = mime_from_ext(ext);
+    let filename = file_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+    let safe_filename: String = filename.chars()
+        .filter(|c| *c != '"' && *c != '\\' && !c.is_control())
+        .collect();
+
+    // Range request support for seeking
+    if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
+        if let Some(range) = range_val.strip_prefix("bytes=") {
+            let parts: Vec<&str> = range.splitn(2, '-').collect();
+            if parts.len() == 2 {
+                let start: usize = parts[0].parse().unwrap_or(0);
+                let end: usize = if parts[1].is_empty() {
+                    total - 1
+                } else {
+                    parts[1].parse().unwrap_or(total - 1).min(total - 1)
+                };
+                if start <= end && start < total {
+                    let slice = data[start..=end].to_vec();
+                    return Ok((
+                        StatusCode::PARTIAL_CONTENT,
+                        [
+                            (header::CONTENT_TYPE, mime),
+                            (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", safe_filename)),
+                            (header::ACCEPT_RANGES, "bytes".to_string()),
+                            (header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, total)),
+                            (header::CONTENT_LENGTH, slice.len().to_string()),
+                        ],
+                        slice,
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", safe_filename)),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
+            (header::CONTENT_RANGE, String::new()),
+            (header::CONTENT_LENGTH, total.to_string()),
+        ],
+        data,
+    ))
 }
 
 // ── WebSocket ───────────────────────────────────────────────────────

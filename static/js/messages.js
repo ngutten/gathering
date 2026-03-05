@@ -1,6 +1,6 @@
 // messages.js — Server message dispatcher
 
-import state, { isDMChannel } from './state.js';
+import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, triggerKeyRotation, renderKeyRequests } from './crypto.js';
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton } from './chat-ui.js';
@@ -11,6 +11,7 @@ import { switchView, renderTopicList, renderThread, appendTopicReply } from './t
 import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCreated, onUserRolesResponse } from './admin.js';
 import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
 import { handleSearchResults, handleSearchHistory } from './search.js';
+import { routeWidgetBroadcast, clearUserPresence } from './widgets/widget-api.js';
 
 export function handleServerMsg(msg) {
   switch (msg.type) {
@@ -24,6 +25,8 @@ export function handleServerMsg(msg) {
         document.getElementById('display-user').textContent = state.currentUser;
         document.getElementById('admin-gear-btn').style.display = state.isAdmin ? '' : 'none';
         initE2E().then(() => updateKeyUI());
+        // Trigger widget presence check for the default channel
+        emit('channel-switched', state.currentChannel);
       } else {
         document.getElementById('auth-error').textContent = msg.error || 'Auth failed';
         state.token = null;
@@ -74,6 +77,7 @@ export function handleServerMsg(msg) {
       if (msg.channel === state.currentChannel) {
         appendSystem(`${msg.username} left`);
       }
+      clearUserPresence(msg.channel, msg.username);
       state.pendingKeyRequests = state.pendingKeyRequests.filter(r => !(r.channel === msg.channel && r.user === msg.username));
       renderKeyRequests();
       if (state.encryptedChannels.has(msg.channel) && state.channelKeys[msg.channel] && state.e2eReady && state.publicKeyCache[msg.username]) {
@@ -150,6 +154,7 @@ export function handleServerMsg(msg) {
       break;
 
     case 'TopicList':
+      if (state._radioTopicHandler) state._radioTopicHandler(msg);
       if (msg.channel === state.currentChannel) {
         state.topicsList = msg.topics;
         renderTopicList(state.topicsList);
@@ -157,6 +162,7 @@ export function handleServerMsg(msg) {
       break;
 
     case 'TopicDetail':
+      if (state._radioDetailHandler) state._radioDetailHandler(msg);
       if (msg.topic.id === state.currentTopicId) {
         renderThread(msg.topic, msg.replies);
       }
@@ -439,6 +445,11 @@ export function handleServerMsg(msg) {
 
     case 'UserRoles':
       onUserRolesResponse(msg.username, msg.roles);
+      break;
+
+    // ── Widgets ──
+    case 'WidgetBroadcast':
+      routeWidgetBroadcast(msg);
       break;
   }
 }

@@ -112,6 +112,14 @@ pub enum ClientMsg {
     RequestChannelKey { channel: String },
     ProvideChannelKey { channel: String, target_user: String, encrypted_key: String },
     RotateChannelKey { channel: String, new_keys: HashMap<String, String> },
+
+    // ── Widgets ──
+    WidgetMessage {
+        channel: String,
+        widget_id: String,
+        action: String,
+        data: serde_json::Value,
+    },
 }
 
 // ── Server → Client messages ────────────────────────────────────────
@@ -222,6 +230,15 @@ pub enum ServerMsg {
     ChannelKeyRequest { channel: String, requesting_user: String, public_key: String },
     ChannelEncrypted { channel: String },
     ChannelKeyRotated { channel: String, key_version: i32 },
+
+    // ── Widgets ──
+    WidgetBroadcast {
+        channel: String,
+        widget_id: String,
+        from_user: String,
+        action: String,
+        data: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
