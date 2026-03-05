@@ -374,10 +374,18 @@ pub struct SearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
+    #[serde(default = "ServerConfig::default_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub http_port: Option<u16>,
     #[serde(default)]
     pub admins: Vec<String>,
     #[serde(default)]
     pub default_roles: HashMap<String, Vec<String>>,
+}
+
+impl ServerConfig {
+    fn default_port() -> u16 { 9123 }
 }
 
 impl Default for ServerConfig {
@@ -395,6 +403,8 @@ impl Default for ServerConfig {
         ]);
         default_roles.insert("admin".to_string(), vec!["*".to_string()]);
         ServerConfig {
+            port: Self::default_port(),
+            http_port: None,
             admins: vec![],
             default_roles,
         }

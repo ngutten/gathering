@@ -28,7 +28,6 @@ use crate::db::Db;
 use crate::hub::Hub;
 use crate::protocol::*;
 
-const DEFAULT_HTTPS_PORT: u16 = 9123;
 const RATE_LIMIT_MAX_REQUESTS: u32 = 10;
 const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const EXPIRY_PURGE_INTERVAL_SECS: u64 = 60;
@@ -118,6 +117,9 @@ async fn main() {
         }
     }
 
+    let config_port = config.port;
+    let config_http_port = config.http_port;
+
     let hub = Hub::new(db.clone(), data_dir.clone());
     let state = Arc::new(AppState {
         hub,
@@ -172,12 +174,12 @@ async fn main() {
     let port: u16 = std::env::var("GATHERING_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_HTTPS_PORT);
+        .unwrap_or(config_port);
 
     let http_port: u16 = std::env::var("GATHERING_HTTP_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(port + 1);
+        .unwrap_or_else(|| config_http_port.unwrap_or(port + 1));
 
     let tls_addr = SocketAddr::from(([0, 0, 0, 0], port));
     let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));

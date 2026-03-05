@@ -1,2 +1,5 @@
 /target/
 gathering-data/
+gathering-client/gathering-data/
+gathering-client/src-tauri/target/
+gathering-client/src-tauri/gen/
