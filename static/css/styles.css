@@ -355,9 +355,9 @@
             font-size: 0.85rem; padding: 0 0.2rem; line-height: 1; }
   .dm-btn:hover { color: var(--accent); }
   .user-item { display: flex; align-items: center; justify-content: space-between; }
-  .user-item-name { display: flex; align-items: center; }
-  .user-item-name::before { content: '\25CF'; color: var(--green); margin-right: 0.4rem;
-                            font-size: 0.6rem; }
+  .user-item-name { display: flex; align-items: center; gap: 0.15rem; }
+  .user-item-name::before { content: '\25CF'; color: var(--green); margin-right: 0.2rem;
+                            font-size: 0.5rem; flex-shrink: 0; }
 
   /* ── Admin panel overlay ─── */
   .admin-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -736,3 +736,38 @@
   .wb-text-input { position: absolute; background: transparent; border: 1px dashed var(--accent);
                    color: #fff; font-family: sans-serif; font-size: 16px; padding: 2px 4px;
                    min-width: 60px; min-height: 1.4em; resize: both; outline: none; z-index: 10; }
+
+  /* ── User profiles ─── */
+  .user-avatar { vertical-align: middle; margin-right: 0.3rem; flex-shrink: 0; }
+  .user-item-name .user-avatar { margin-right: 0.3rem; }
+  .user-item-status { font-size: 0.65rem; color: var(--text2); max-width: 80px;
+                      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; }
+  .msg .meta .user-avatar { margin-right: 0.25rem; }
+
+  .profile-card { padding: 1rem; }
+  .profile-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+  .profile-avatar-wrap { position: relative; flex-shrink: 0; }
+  .profile-avatar-big { width: 80px; height: 80px; border-radius: 50%; object-fit: cover; display: block; }
+  .profile-avatar-upload { position: absolute; bottom: 0; right: 0; background: var(--bg3);
+                           border: 1px solid var(--border); border-radius: 50%; width: 24px; height: 24px;
+                           display: flex; align-items: center; justify-content: center; cursor: pointer;
+                           font-size: 0.7rem; }
+  .profile-avatar-upload:hover { border-color: var(--accent); }
+  .profile-name-section { flex: 1; min-width: 0; }
+  .profile-username { font-size: 1.1rem; font-weight: 600; color: var(--accent); }
+  .profile-status { font-size: 0.8rem; color: var(--text2); margin-top: 0.2rem; }
+  .profile-about-section { margin-bottom: 1rem; }
+  .profile-label { font-size: 0.7rem; color: var(--text2); text-transform: uppercase; margin-bottom: 0.3rem; }
+  .profile-about { font-size: 0.85rem; color: var(--text); line-height: 1.5; }
+  .profile-field { margin-bottom: 0.8rem; }
+  .profile-field input, .profile-field textarea {
+    width: 100%; padding: 0.4rem 0.6rem; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); font-family: inherit; font-size: 0.85rem; box-sizing: border-box; }
+  .profile-field textarea { resize: vertical; }
+  .profile-edit-section { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .profile-edit-btn, .profile-save-btn, .profile-cancel-btn {
+    padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 4px;
+    cursor: pointer; font-family: inherit; font-size: 0.8rem; }
+  .profile-edit-btn { background: var(--bg3); color: var(--text); }
+  .profile-save-btn { background: var(--accent); color: #000; border-color: var(--accent); }
+  .profile-cancel-btn { background: var(--bg3); color: var(--text2); }

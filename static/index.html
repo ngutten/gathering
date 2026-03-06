@@ -33,7 +33,7 @@
       <div class="sidebar-header">
         <div class="sidebar-header-left">
           <h2>&#x2381; Gathering</h2>
-          <div class="user-info">logged in as <strong id="display-user"></strong></div>
+          <div class="user-info">logged in as <strong id="display-user" onclick="openProfile(this.textContent)" style="cursor:pointer;" title="View profile"></strong></div>
         </div>
         <div style="display:flex;gap:0.3rem;align-items:center;">
           <button class="admin-btn" id="admin-gear-btn" style="display:none" onclick="openAdminPanel()" title="Admin">&#x2699;</button>
@@ -302,6 +302,18 @@
     </div>
     <div class="admin-tab-content" id="admin-tab-content">
       <!-- Filled dynamically -->
+    </div>
+  </div>
+</div>
+
+<!-- Profile Overlay -->
+<div class="admin-overlay" id="profile-overlay" onclick="if(event.target===this)closeProfile()">
+  <div class="admin-panel" style="width:400px;">
+    <div class="admin-panel-header">
+      <h2>Profile</h2>
+      <button class="admin-panel-close" onclick="closeProfile()">&times;</button>
+    </div>
+    <div class="admin-tab-content" id="profile-content" data-profile-user="">
     </div>
   </div>
 </div>

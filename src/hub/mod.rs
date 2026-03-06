@@ -5,6 +5,7 @@ mod dms;
 mod encryption;
 mod files;
 mod messages;
+mod profiles;
 mod reactions;
 mod topics;
 mod voice;
@@ -432,6 +433,18 @@ impl Hub {
                 self.handle_list_dms(id).await;
             }
 
+            ClientMsg::GetProfile { username: target_user } => {
+                self.handle_get_profile(id, target_user).await;
+            }
+
+            ClientMsg::GetProfiles { usernames } => {
+                self.handle_get_profiles(id, usernames).await;
+            }
+
+            ClientMsg::UpdateProfile { field, value } => {
+                self.handle_update_profile(id, field, value).await;
+            }
+
             ClientMsg::GetPreferences => {
                 let clients = self.clients.lock().await;
                 let username = match clients.get(&id) {
@@ -638,5 +651,16 @@ impl Hub {
                 eprintln!("[hub] send message to client {id} failed: {e:?}");
             }
         }
+    }
+
+    /// Graceful shutdown: notify all clients and drop their senders
+    pub async fn shutdown(&self, reason: &str) {
+        let mut clients = self.clients.lock().await;
+        let msg = ServerMsg::ServerShutdown { reason: reason.to_string() };
+        for (_, client) in clients.iter() {
+            let _ = Self::send_to(&client.tx, &msg);
+        }
+        clients.clear();
+        tracing::info!("Hub shutdown complete: all clients notified and removed");
     }
 }

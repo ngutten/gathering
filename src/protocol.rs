@@ -147,6 +147,11 @@ pub enum ClientMsg {
     GetPreferences,
     SetPreference { key: String, value: String },
 
+    // ── Profiles ──
+    GetProfile { username: String },
+    GetProfiles { usernames: Vec<String> },
+    UpdateProfile { field: String, value: String },
+
     // ── Widgets ──
     WidgetMessage {
         channel: String,
@@ -305,6 +310,15 @@ pub enum ServerMsg {
         channel: String,
         widget_id: String,
     },
+
+    // ── Profiles ──
+    UserProfile { username: String, profile: HashMap<String, String> },
+    UserProfiles { profiles: HashMap<String, HashMap<String, String>> },
+    ProfileUpdated { username: String, field: String, value: String },
+
+    // ── Server lifecycle ──
+    /// Sent to all clients when the server is shutting down gracefully
+    ServerShutdown { reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

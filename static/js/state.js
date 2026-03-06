@@ -85,6 +85,12 @@ const state = {
 
   // Channel metadata
   channelCreators: {},
+
+  // Profile cache: { username: { avatar_id, status, about } }
+  profileCache: {},
+
+  // Online users list (kept in sync with OnlineUsers messages)
+  onlineUsers: [],
 };
 
 // Load last-read timestamps from localStorage

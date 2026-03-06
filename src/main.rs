@@ -181,7 +181,7 @@ async fn main() {
         .route("/ws", get(ws_upgrade))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::new()) // S3: same-origin only (no permissive CORS)
-        .layer(Extension(state));
+        .layer(Extension(state.clone()));
 
     let port: u16 = std::env::var("GATHERING_PORT")
         .ok()
@@ -214,19 +214,68 @@ async fn main() {
             let redirect_url = format!("https://{}:{}{}", host, https_port, path);
             Redirect::permanent(&redirect_url)
         });
+
+    // Handle for HTTPS graceful shutdown
+    let tls_handle = axum_server::Handle::new();
+    let tls_handle_for_shutdown = tls_handle.clone();
+
+    // Shared shutdown notify for HTTP redirect server
+    let http_shutdown = Arc::new(tokio::sync::Notify::new());
+    let http_shutdown_recv = http_shutdown.clone();
+
+    // Spawn HTTP redirect server
     tokio::spawn(async move {
         axum::Server::bind(&http_addr)
             .serve(http_redirect.into_make_service())
+            .with_graceful_shutdown(async move {
+                http_shutdown_recv.notified().await;
+            })
             .await
             .unwrap();
     });
 
-    // Run HTTPS server on main port
+    // Spawn HTTPS server with handle
     let tls_config = tls::load_rustls_config(&data_dir).await;
-    axum_server::bind_rustls(tls_addr, tls_config)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+    tokio::spawn(async move {
+        axum_server::bind_rustls(tls_addr, tls_config)
+            .handle(tls_handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    });
+
+    // Wait for shutdown signal (SIGINT or SIGTERM)
+    {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        {
+            let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("Failed to install SIGTERM handler");
+            tokio::select! {
+                _ = ctrl_c => tracing::info!("Received SIGINT (Ctrl+C)"),
+                _ = sigterm.recv() => tracing::info!("Received SIGTERM"),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            ctrl_c.await.ok();
+            tracing::info!("Received SIGINT (Ctrl+C)");
+        }
+    }
+
+    tracing::info!("Shutting down gracefully...");
+
+    // Notify all WebSocket clients before closing
+    state.hub.shutdown("Server is shutting down").await;
+
+    // Signal servers to stop accepting new connections and drain existing ones
+    tls_handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+    http_shutdown.notify_one();
+
+    // Brief wait for connections to drain
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    tracing::info!("Shutdown complete");
 }
 
 // ── HTTP Handlers ───────────────────────────────────────────────────

@@ -7,6 +7,7 @@ mod invites;
 mod members;
 mod messages;
 mod preferences;
+mod profiles;
 mod quotas;
 mod reactions;
 mod roles;
@@ -248,6 +249,15 @@ impl Db {
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_by TEXT NOT NULL,
                 PRIMARY KEY (channel, widget_id)
+            );"
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS user_profiles (
+                username TEXT PRIMARY KEY REFERENCES users(username),
+                avatar_id TEXT,
+                status TEXT,
+                about TEXT
             );"
         )?;
 

@@ -77,7 +77,7 @@ export function appendMessage(msg) {
 
   div.innerHTML = `${actionsHtml}${replyHtml}
     <div class="meta">
-      ${pinnedBadge}<span class="author">${escapeHtml(msg.author)}</span>
+      ${pinnedBadge}${isContinuation ? '' : avatarHtml(msg.author, 20)}<span class="author" onclick="openProfile('${escapeHtml(msg.author)}')" style="cursor:pointer;">${escapeHtml(msg.author)}</span>
       <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}
     </div>
     <div class="body">${content}</div>${attachHtml}${reactionsHtml}`;
@@ -276,10 +276,22 @@ export function renderVoiceChannelList() {
 
 export function renderOnlineUsers(users) {
   const el = document.getElementById('online-users');
+  // Request profiles for users we haven't cached yet
+  const uncached = users.filter(u => !state.profileCache[u]);
+  if (uncached.length > 0) {
+    send('GetProfiles', { usernames: uncached });
+  }
   el.innerHTML = users.map(u => {
     const dmBtn = u !== state.currentUser ?
       `<button class="dm-btn" onclick="startDM('${escapeHtml(u)}')" title="Message ${escapeHtml(u)}">&#x2709;</button>` : '';
-    return `<div class="user-item"><span class="user-item-name">${escapeHtml(u)}</span>${dmBtn}</div>`;
+    const profile = state.profileCache[u] || {};
+    const statusHtml = profile.status ? `<span class="user-item-status" title="${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span>` : '';
+    return `<div class="user-item">
+      <span class="user-item-name" onclick="openProfile('${escapeHtml(u)}')" style="cursor:pointer;">
+        ${avatarHtml(u, 18)}${escapeHtml(u)}
+      </span>
+      ${statusHtml}${dmBtn}
+    </div>`;
   }).join('');
 }
 
@@ -687,6 +699,139 @@ export function renderPinnedPanel(msg) {
     }).join('');
   }
   overlay.classList.add('active');
+}
+
+// ── Profile functions ──
+
+export function avatarHtml(username, size) {
+  const sz = size || 24;
+  const profile = state.profileCache[username];
+  if (profile && profile.avatar_id) {
+    const url = fileUrl(profile.avatar_id);
+    return `<img class="user-avatar" src="${url}" alt="" style="width:${sz}px;height:${sz}px;border-radius:50%;object-fit:cover;">`;
+  }
+  // Generate a color from the username
+  let hash = 0;
+  for (let i = 0; i < username.length; i++) hash = username.charCodeAt(i) + ((hash << 5) - hash);
+  const hue = ((hash % 360) + 360) % 360;
+  const initial = username.charAt(0).toUpperCase();
+  return `<span class="user-avatar user-avatar-default" style="width:${sz}px;height:${sz}px;line-height:${sz}px;font-size:${Math.round(sz * 0.5)}px;border-radius:50%;background:hsl(${hue},50%,35%);color:#fff;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(initial)}</span>`;
+}
+
+export function openProfile(username) {
+  send('GetProfile', { username });
+  // Show modal immediately with cached data (will update when response arrives)
+  renderProfileModal(username);
+  document.getElementById('profile-overlay').classList.add('active');
+}
+
+export function closeProfile() {
+  document.getElementById('profile-overlay').classList.remove('active');
+}
+
+export function renderProfileModal(username) {
+  const profile = state.profileCache[username] || {};
+  const isOwn = username === state.currentUser;
+  const el = document.getElementById('profile-content');
+  const avatarBig = profile.avatar_id
+    ? `<img class="profile-avatar-big" src="${fileUrl(profile.avatar_id)}" alt="">`
+    : avatarHtml(username, 80);
+  const statusText = profile.status ? escapeHtml(profile.status) : '<span style="color:var(--text2)">No status set</span>';
+  const aboutText = profile.about ? escapeHtml(profile.about).replace(/\n/g, '<br>') : '<span style="color:var(--text2)">No about info</span>';
+
+  el.setAttribute('data-profile-user', username);
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-header">
+        <div class="profile-avatar-wrap">${avatarBig}</div>
+        <div class="profile-name-section">
+          <div class="profile-username">${escapeHtml(username)}</div>
+          <div class="profile-status">${statusText}</div>
+        </div>
+      </div>
+      <div class="profile-about-section">
+        <div class="profile-label">About</div>
+        <div class="profile-about">${aboutText}</div>
+      </div>
+      ${isOwn ? '<div class="profile-edit-section"><button class="profile-edit-btn" onclick="openEditProfile()">Edit Profile</button></div>' : ''}
+    </div>
+  `;
+}
+
+export function openEditProfile() {
+  const profile = state.profileCache[state.currentUser] || {};
+  const el = document.getElementById('profile-content');
+  const avatarBig = profile.avatar_id
+    ? `<img class="profile-avatar-big" src="${fileUrl(profile.avatar_id)}" alt="">`
+    : avatarHtml(state.currentUser, 80);
+
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-header">
+        <div class="profile-avatar-wrap">${avatarBig}
+          <label class="profile-avatar-upload" title="Upload avatar">
+            &#x1F4F7;
+            <input type="file" accept="image/*" onchange="uploadAvatar(this)" style="display:none;">
+          </label>
+        </div>
+        <div class="profile-name-section">
+          <div class="profile-username">${escapeHtml(state.currentUser)}</div>
+        </div>
+      </div>
+      <div class="profile-field">
+        <label class="profile-label">Status</label>
+        <input type="text" id="profile-status-input" value="${escapeHtml(profile.status || '')}" maxlength="128" placeholder="What's on your mind?">
+      </div>
+      <div class="profile-field">
+        <label class="profile-label">About</label>
+        <textarea id="profile-about-input" maxlength="1024" rows="4" placeholder="Tell others about yourself">${escapeHtml(profile.about || '')}</textarea>
+      </div>
+      <div class="profile-edit-section">
+        <button class="profile-save-btn" onclick="saveProfile()">Save</button>
+        <button class="profile-cancel-btn" onclick="openProfile('${escapeHtml(state.currentUser)}')">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+export function saveProfile() {
+  const statusInput = document.getElementById('profile-status-input');
+  const aboutInput = document.getElementById('profile-about-input');
+  const oldProfile = state.profileCache[state.currentUser] || {};
+
+  if (statusInput && statusInput.value !== (oldProfile.status || '')) {
+    send('UpdateProfile', { field: 'status', value: statusInput.value });
+  }
+  if (aboutInput && aboutInput.value !== (oldProfile.about || '')) {
+    send('UpdateProfile', { field: 'about', value: aboutInput.value });
+  }
+
+  // Switch back to view mode
+  openProfile(state.currentUser);
+}
+
+export async function uploadAvatar(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  if (file.size > 2 * 1024 * 1024) {
+    alert('Avatar must be under 2MB');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('channel', 'general');
+  const resp = await fetch(apiUrl('/api/upload'), {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + state.token },
+    body: formData,
+  });
+  const data = await resp.json();
+  if (data.ok && data.file) {
+    send('UpdateProfile', { field: 'avatar_id', value: data.file.id });
+  } else {
+    alert(data.error || 'Upload failed');
+  }
 }
 
 export function requestChannelKey() {

@@ -3,7 +3,7 @@
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -13,6 +13,12 @@ import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.j
 import { handleSearchResults, handleSearchHistory } from './search.js';
 import { routeWidgetBroadcast, routeWidgetServerResponse, clearUserPresence } from './widgets/widget-api.js';
 import { showNotification, renderNotificationSettings } from './notifications.js';
+
+function refreshOnlineUsersSidebar() {
+  if (state.onlineUsers.length > 0) {
+    renderOnlineUsers(state.onlineUsers);
+  }
+}
 
 export function handleServerMsg(msg) {
   switch (msg.type) {
@@ -82,6 +88,7 @@ export function handleServerMsg(msg) {
       break;
 
     case 'OnlineUsers':
+      state.onlineUsers = msg.users;
       renderOnlineUsers(msg.users);
       break;
 
@@ -499,6 +506,43 @@ export function handleServerMsg(msg) {
     case 'WidgetStateLoaded':
     case 'WidgetStateSaved':
       routeWidgetServerResponse(msg);
+      break;
+
+    // ── Profiles ──
+    case 'UserProfile':
+      state.profileCache[msg.username] = msg.profile || {};
+      // If the profile modal is showing this user, refresh it
+      {
+        const profileEl = document.getElementById('profile-content');
+        if (profileEl && profileEl.getAttribute('data-profile-user') === msg.username) {
+          renderProfileModal(msg.username);
+        }
+      }
+      break;
+
+    case 'UserProfiles':
+      if (msg.profiles) {
+        Object.assign(state.profileCache, msg.profiles);
+        refreshOnlineUsersSidebar();
+      }
+      break;
+
+    case 'ProfileUpdated':
+      if (!state.profileCache[msg.username]) state.profileCache[msg.username] = {};
+      state.profileCache[msg.username][msg.field] = msg.value;
+      refreshOnlineUsersSidebar();
+      // Refresh profile modal if open for this user
+      {
+        const profileEl = document.getElementById('profile-content');
+        if (profileEl && profileEl.getAttribute('data-profile-user') === msg.username
+            && document.getElementById('profile-overlay').classList.contains('active')) {
+          renderProfileModal(msg.username);
+        }
+      }
+      break;
+
+    case 'ServerShutdown':
+      appendSystem(`Server shutting down: ${msg.reason}`);
       break;
   }
 }

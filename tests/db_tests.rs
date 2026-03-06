@@ -813,3 +813,70 @@ fn pin_nonexistent_message_fails() {
     let err = db.pin_message("nonexistent", true).unwrap_err();
     assert!(err.contains("not found"), "got: {err}");
 }
+
+// ── User Profiles ───────────────────────────────────────────────────
+
+#[test]
+fn profile_empty_by_default() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let profile = db.get_profile("alice");
+    assert!(profile.is_empty());
+}
+
+#[test]
+fn set_and_get_profile_fields() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+
+    db.set_profile_field("alice", "status", "Working").unwrap();
+    db.set_profile_field("alice", "about", "I like Rust").unwrap();
+
+    let profile = db.get_profile("alice");
+    assert_eq!(profile.get("status").unwrap(), "Working");
+    assert_eq!(profile.get("about").unwrap(), "I like Rust");
+    assert!(!profile.contains_key("avatar_id"));
+}
+
+#[test]
+fn set_profile_field_upserts() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+
+    db.set_profile_field("alice", "status", "First").unwrap();
+    db.set_profile_field("alice", "status", "Second").unwrap();
+
+    let profile = db.get_profile("alice");
+    assert_eq!(profile.get("status").unwrap(), "Second");
+}
+
+#[test]
+fn set_profile_invalid_field_rejected() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let err = db.set_profile_field("alice", "invalid_field", "value").unwrap_err();
+    assert!(err.contains("Invalid"));
+}
+
+#[test]
+fn get_profiles_bulk() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    db.register("bob", "password123").unwrap();
+
+    db.set_profile_field("alice", "status", "Online").unwrap();
+    db.set_profile_field("bob", "about", "Hello world").unwrap();
+
+    let profiles = db.get_profiles_bulk(&["alice".into(), "bob".into(), "nonexistent".into()]);
+    assert_eq!(profiles.len(), 2);
+    assert_eq!(profiles["alice"].get("status").unwrap(), "Online");
+    assert_eq!(profiles["bob"].get("about").unwrap(), "Hello world");
+    assert!(!profiles.contains_key("nonexistent"));
+}
+
+#[test]
+fn get_profiles_bulk_empty() {
+    let db = fresh_db();
+    let profiles = db.get_profiles_bulk(&[]);
+    assert!(profiles.is_empty());
+}
