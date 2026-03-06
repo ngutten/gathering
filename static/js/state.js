@@ -69,6 +69,7 @@ const state = {
   // Unread tracking
   unreadCounts: {},
   lastReadTimestamps: {},
+  unreadMentions: {},  // channels with unread @mentions
 
   // File manager state
   fileManagerOpen: false,

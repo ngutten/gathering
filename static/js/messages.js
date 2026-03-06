@@ -49,6 +49,12 @@ export function handleServerMsg(msg) {
         if (msg.channel !== state.currentChannel || document.hidden) {
           const mentionType = msg.content.match(/@(channel|server)\b/) ? (msg.content.match(/@channel\b/) ? 'channel' : 'server') : 'user';
           showNotification(msg, mentionType);
+          // Track unread mentions for gold badge
+          if (msg.channel !== state.currentChannel) {
+            state.unreadMentions[msg.channel] = true;
+            renderChannels();
+            renderDMList();
+          }
         }
       }
       break;

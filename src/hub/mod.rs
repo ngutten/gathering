@@ -390,8 +390,8 @@ impl Hub {
                 self.handle_rotate_channel_key(id, channel, new_keys).await;
             }
 
-            ClientMsg::SearchMessages { query, channel } => {
-                self.handle_search_messages(id, query, channel).await;
+            ClientMsg::SearchMessages { query, channel, from, date_start, date_end, mentions } => {
+                self.handle_search_messages(id, query, channel, from, date_start, date_end, mentions).await;
             }
 
             ClientMsg::ListMyFiles => {

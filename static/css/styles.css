@@ -406,6 +406,7 @@
   .unread-badge { background: var(--accent2); color: #fff; font-size: 0.6rem; font-weight: 700;
                   padding: 0.1rem 0.35rem; border-radius: 8px; min-width: 16px;
                   text-align: center; display: inline-block; line-height: 1.2; }
+  .unread-badge.unread-mention { background: #d4a017; color: #000; }
   .channel-right { display: flex; align-items: center; gap: 0.3rem; }
   .channel-item.has-unread span:first-child, .dm-item.has-unread .dm-name { font-weight: 700; color: var(--text); }
   .channel-item.no-e2e-key, .dm-item.no-e2e-key { opacity: 0.45; }
@@ -543,6 +544,13 @@
   .initiative-roll-input { width: 50px; }
   .initiative-name-input:focus, .initiative-roll-input:focus { outline: none; border-color: var(--accent); }
   .initiative-actions { display: flex; gap: 0.3rem; }
+
+  /* ── Date headers ─── */
+  .msg.date-header { display: flex; align-items: center; gap: 0.7rem; padding: 0.6rem 0 0.3rem;
+                     font-size: 0.7rem; color: var(--text2); user-select: none; }
+  .msg.date-header::before, .msg.date-header::after { content: ''; flex: 1; height: 1px;
+                                                       background: var(--border); }
+  .msg.date-header span { white-space: nowrap; }
 
   /* ── Message consolidation ─── */
   .msg-continuation { padding-top: 0; }

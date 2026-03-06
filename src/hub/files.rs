@@ -4,7 +4,11 @@ use crate::protocol::ServerMsg;
 const MAX_SEARCH_RESULTS: u32 = 50;
 
 impl Hub {
-    pub(super) async fn handle_search_messages(&self, id: usize, query: String, channel: Option<String>) {
+    pub(super) async fn handle_search_messages(
+        &self, id: usize, query: String, channel: Option<String>,
+        from: Option<String>, date_start: Option<String>, date_end: Option<String>,
+        mentions: Option<String>,
+    ) {
         let clients = self.clients.lock().await;
         let username = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -19,7 +23,11 @@ impl Hub {
                 return;
             }
         }
-        let mut results = self.db.search_messages(&query, channel.as_deref(), MAX_SEARCH_RESULTS);
+        let mut results = self.db.search_messages(
+            &query, channel.as_deref(), from.as_deref(),
+            date_start.as_deref(), date_end.as_deref(), mentions.as_deref(),
+            MAX_SEARCH_RESULTS,
+        );
         // Filter out results from channels the user can't access
         if channel.is_none() {
             results.retain(|r| self.db.can_access_channel(&r.channel, &username));

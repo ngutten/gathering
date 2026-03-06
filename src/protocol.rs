@@ -104,7 +104,18 @@ pub enum ClientMsg {
     DeleteFile { file_id: String },
 
     // ── Search ──
-    SearchMessages { query: String, channel: Option<String> },
+    SearchMessages {
+        query: String,
+        channel: Option<String>,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        date_start: Option<String>,
+        #[serde(default)]
+        date_end: Option<String>,
+        #[serde(default)]
+        mentions: Option<String>,
+    },
 
     // ── Direct Messages ──
     StartDM { target_user: String },

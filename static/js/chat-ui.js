@@ -77,6 +77,9 @@ export function appendMessage(msg) {
       <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}
     </div>
     <div class="body">${content}</div>${attachHtml}`;
+  // Insert date header if this message is on a different day than the previous
+  maybeInsertDateHeader(el, msg);
+
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
 
@@ -84,9 +87,52 @@ export function appendMessage(msg) {
   decryptAndRenderAttachments(msg.attachments);
 }
 
+function maybeInsertDateHeader(container, msg) {
+  const msgDate = new Date(msg.timestamp);
+  const msgDay = new Date(msgDate.getFullYear(), msgDate.getMonth(), msgDate.getDate());
+
+  // Find the last message (any type) to compare dates
+  const allEls = container.querySelectorAll('.msg:not(.date-header)');
+  if (allEls.length === 0) {
+    // First message — always show date header
+    insertDateHeader(container, msgDay);
+    return;
+  }
+  const lastEl = allEls[allEls.length - 1];
+  const lastTs = lastEl.getAttribute('data-timestamp');
+  if (!lastTs) {
+    insertDateHeader(container, msgDay);
+    return;
+  }
+  const lastDate = new Date(lastTs);
+  const lastDay = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate());
+  if (msgDay.getTime() !== lastDay.getTime()) {
+    insertDateHeader(container, msgDay);
+  }
+}
+
+function insertDateHeader(container, date) {
+  const today = new Date();
+  const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const yesterday = new Date(todayDay); yesterday.setDate(yesterday.getDate() - 1);
+
+  let label;
+  if (date.getTime() === todayDay.getTime()) {
+    label = 'Today';
+  } else if (date.getTime() === yesterday.getTime()) {
+    label = 'Yesterday';
+  } else {
+    label = date.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+  const div = document.createElement('div');
+  div.className = 'msg date-header';
+  div.innerHTML = `<span>${escapeHtml(label)}</span>`;
+  container.appendChild(div);
+}
+
 function checkContinuation(container, msg) {
   // Find the last non-system .msg element
-  const allMsgs = container.querySelectorAll('.msg:not(.system)');
+  const allMsgs = container.querySelectorAll('.msg:not(.system):not(.date-header)');
   if (allMsgs.length === 0) return false;
   const lastMsg = allMsgs[allMsgs.length - 1];
   const lastAuthor = lastMsg.getAttribute('data-author');
@@ -141,7 +187,9 @@ export function renderChannels() {
   el.innerHTML = textChannels.map(ch => {
     const lock = ch.encrypted ? '&#x1F512; ' : ch.restricted ? '&#x1F6E1; ' : '#';
     const unread = state.unreadCounts[ch.name] || 0;
-    const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+    const hasMention = state.unreadMentions[ch.name];
+    const badgeClass = hasMention ? 'unread-badge unread-mention' : 'unread-badge';
+    const unreadBadge = unread > 0 ? `<span class="${badgeClass}">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
     const noKeyClass = ch.encrypted && !state.e2eReady ? ' no-e2e-key' : '';
     return `<div class="channel-item${boldClass}${noKeyClass} ${ch.name === state.currentChannel ? 'active' : ''}"
@@ -164,7 +212,9 @@ export function renderVoiceChannelList() {
     const isViewing = ch.name === state.currentChannel;
     const occupants = state.voiceChannelOccupancy[ch.name] || [];
     const unread = state.unreadCounts[ch.name] || 0;
-    const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+    const hasMention = state.unreadMentions[ch.name];
+    const badgeClass = hasMention ? 'unread-badge unread-mention' : 'unread-badge';
+    const unreadBadge = unread > 0 ? `<span class="${badgeClass}">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
 
     let html = `<div class="voice-channel-item${boldClass}${isViewing ? ' viewing' : ''}">
@@ -218,7 +268,9 @@ export function renderDMList() {
   }
   el.innerHTML = entries.map(([ch, other]) => {
     const unread = state.unreadCounts[ch] || 0;
-    const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
+    const hasMention = state.unreadMentions[ch];
+    const badgeClass = hasMention ? 'unread-badge unread-mention' : 'unread-badge';
+    const unreadBadge = unread > 0 ? `<span class="${badgeClass}">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
     const noKeyClass = !state.e2eReady ? ' no-e2e-key' : '';
     return `<div class="dm-item${boldClass}${noKeyClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
@@ -431,6 +483,7 @@ export function switchChannel(name) {
   state.topicsList = [];
   // Clear unread for this channel
   state.unreadCounts[name] = 0;
+  delete state.unreadMentions[name];
   state.lastReadTimestamps[name] = new Date().toISOString();
   try { localStorage.setItem('gathering_last_read_' + name, state.lastReadTimestamps[name]); } catch(e) {}
   const isVoice = state.voiceChannels && state.voiceChannels.some(ch => ch.name === name);
