@@ -535,6 +535,13 @@ export function switchChannel(name) {
     document.querySelector('.view-toggle').style.display = '';
   }
   document.getElementById('messages').innerHTML = '';
+  // Reset pinned banner for the new channel
+  const pinnedList = document.getElementById('pinned-banner-list');
+  if (pinnedList) pinnedList.style.display = 'none';
+  const pinnedToggle = document.getElementById('pinned-banner-toggle');
+  if (pinnedToggle) pinnedToggle.classList.remove('expanded');
+  renderPinnedBanner();
+  send('GetPinnedMessages', { channel: name });
   renderChannels();
   renderDMList();
   updateRequestKeyButton();
@@ -679,26 +686,82 @@ export function closePinnedPanel() {
 }
 
 export function renderPinnedPanel(msg) {
-  const overlay = document.getElementById('pinned-messages-overlay');
-  if (!overlay) return;
-  const content = document.getElementById('pinned-messages-content');
-  if (!content) return;
+  // Cache the pinned messages
+  state.pinnedMessages[msg.channel] = msg.messages;
 
-  if (msg.messages.length === 0) {
-    content.innerHTML = '<div style="color:var(--text2);font-size:0.8rem;">No pinned messages in this channel.</div>';
-  } else {
-    content.innerHTML = msg.messages.map(m => {
-      let displayContent = m.content;
-      if (m.encrypted) displayContent = tryDecrypt(m.content, msg.channel);
-      const rendered = renderRichContent(displayContent);
-      const time = new Date(m.timestamp).toLocaleString();
-      return `<div class="pinned-msg" onclick="scrollToMessage('${escapeHtml(m.id)}'); closePinnedPanel();">
-        <div class="meta"><span class="author">${escapeHtml(m.author)}</span> <span class="time">${time}</span></div>
-        <div class="body">${rendered}</div>
-      </div>`;
-    }).join('');
+  // Update the banner
+  if (msg.channel === state.currentChannel) {
+    renderPinnedBanner();
   }
-  overlay.classList.add('active');
+
+  // Also update the overlay if it's open
+  const overlay = document.getElementById('pinned-messages-overlay');
+  if (overlay && overlay.classList.contains('active')) {
+    const content = document.getElementById('pinned-messages-content');
+    if (!content) return;
+    if (msg.messages.length === 0) {
+      content.innerHTML = '<div style="color:var(--text2);font-size:0.8rem;">No pinned messages in this channel.</div>';
+    } else {
+      content.innerHTML = msg.messages.map(m => {
+        let displayContent = m.content;
+        if (m.encrypted) displayContent = tryDecrypt(m.content, msg.channel);
+        const rendered = renderRichContent(displayContent);
+        const time = new Date(m.timestamp).toLocaleString();
+        return `<div class="pinned-msg" onclick="scrollToMessage('${escapeHtml(m.id)}'); closePinnedPanel();">
+          <div class="meta"><span class="author">${escapeHtml(m.author)}</span> <span class="time">${time}</span></div>
+          <div class="body">${rendered}</div>
+        </div>`;
+      }).join('');
+    }
+  }
+}
+
+// ── Pinned banner ──
+
+export function renderPinnedBanner() {
+  const banner = document.getElementById('pinned-banner');
+  if (!banner) return;
+
+  const pins = state.pinnedMessages[state.currentChannel] || [];
+  if (pins.length === 0) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  banner.style.display = '';
+  const textEl = document.getElementById('pinned-banner-text');
+
+  if (pins.length === 1) {
+    const p = pins[0];
+    let content = p.content;
+    if (p.encrypted) content = tryDecrypt(p.content, state.currentChannel);
+    const snippet = content.length > 80 ? content.substring(0, 80) + '...' : content;
+    textEl.innerHTML = `<strong>${escapeHtml(p.author)}</strong>: ${escapeHtml(snippet)}`;
+  } else {
+    textEl.innerHTML = `<strong>${pins.length} pinned messages</strong>`;
+  }
+
+  // Render the expanded list
+  const listEl = document.getElementById('pinned-banner-list');
+  listEl.innerHTML = pins.map(m => {
+    let displayContent = m.content;
+    if (m.encrypted) displayContent = tryDecrypt(m.content, state.currentChannel);
+    const rendered = renderRichContent(displayContent);
+    const time = new Date(m.timestamp).toLocaleString();
+    return `<div class="pinned-banner-item" onclick="scrollToMessage('${escapeHtml(m.id)}')">
+      <div class="meta"><span class="author">${escapeHtml(m.author)}</span> <span class="time">${time}</span></div>
+      <div class="body">${rendered}</div>
+    </div>`;
+  }).join('');
+}
+
+export function togglePinnedBanner() {
+  const listEl = document.getElementById('pinned-banner-list');
+  const toggleEl = document.getElementById('pinned-banner-toggle');
+  if (!listEl) return;
+  const expanded = listEl.style.display !== 'none';
+  listEl.style.display = expanded ? 'none' : '';
+  if (toggleEl) toggleEl.classList.toggle('expanded', !expanded);
 }
 
 // ── Profile functions ──
@@ -707,7 +770,7 @@ export function avatarHtml(username, size) {
   const sz = size || 24;
   const profile = state.profileCache[username];
   if (profile && profile.avatar_id) {
-    const url = fileUrl(profile.avatar_id);
+    const url = fileUrl('/api/files/' + profile.avatar_id);
     return `<img class="user-avatar" src="${url}" alt="" style="width:${sz}px;height:${sz}px;border-radius:50%;object-fit:cover;">`;
   }
   // Generate a color from the username
@@ -716,6 +779,19 @@ export function avatarHtml(username, size) {
   const hue = ((hash % 360) + 360) % 360;
   const initial = username.charAt(0).toUpperCase();
   return `<span class="user-avatar user-avatar-default" style="width:${sz}px;height:${sz}px;line-height:${sz}px;font-size:${Math.round(sz * 0.5)}px;border-radius:50%;background:hsl(${hue},50%,35%);color:#fff;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(initial)}</span>`;
+}
+
+export function refreshAvatarsInDOM(username) {
+  // Update all avatar elements for this user in the messages area
+  const msgs = document.querySelectorAll(`.msg[data-author="${CSS.escape(username)}"]`);
+  msgs.forEach(msgEl => {
+    const avatar = msgEl.querySelector('.meta .user-avatar');
+    if (avatar) {
+      const parent = avatar.parentNode;
+      const newAvatar = document.createRange().createContextualFragment(avatarHtml(username, 20));
+      parent.replaceChild(newAvatar, avatar);
+    }
+  });
 }
 
 export function openProfile(username) {
@@ -734,7 +810,7 @@ export function renderProfileModal(username) {
   const isOwn = username === state.currentUser;
   const el = document.getElementById('profile-content');
   const avatarBig = profile.avatar_id
-    ? `<img class="profile-avatar-big" src="${fileUrl(profile.avatar_id)}" alt="">`
+    ? `<img class="profile-avatar-big" src="${fileUrl('/api/files/' + profile.avatar_id)}" alt="">`
     : avatarHtml(username, 80);
   const statusText = profile.status ? escapeHtml(profile.status) : '<span style="color:var(--text2)">No status set</span>';
   const aboutText = profile.about ? escapeHtml(profile.about).replace(/\n/g, '<br>') : '<span style="color:var(--text2)">No about info</span>';
@@ -762,7 +838,7 @@ export function openEditProfile() {
   const profile = state.profileCache[state.currentUser] || {};
   const el = document.getElementById('profile-content');
   const avatarBig = profile.avatar_id
-    ? `<img class="profile-avatar-big" src="${fileUrl(profile.avatar_id)}" alt="">`
+    ? `<img class="profile-avatar-big" src="${fileUrl('/api/files/' + profile.avatar_id)}" alt="">`
     : avatarHtml(state.currentUser, 80);
 
   el.innerHTML = `
@@ -832,6 +908,174 @@ export async function uploadAvatar(input) {
   } else {
     alert(data.error || 'Upload failed');
   }
+}
+
+// ── User Settings panel ──
+
+export function openUserSettings() {
+  const el = document.getElementById('user-settings-content');
+  const profile = state.profileCache[state.currentUser] || {};
+  const avatarBig = profile.avatar_id
+    ? `<img class="profile-avatar-big" src="${fileUrl('/api/files/' + profile.avatar_id)}" alt="">`
+    : avatarHtml(state.currentUser, 80);
+  const statusVal = escapeHtml(profile.status || '');
+  const aboutVal = escapeHtml(profile.about || '');
+
+  // Notification prefs
+  const prefs = state.notificationPrefs || {};
+  const optionsHtml = (key) => {
+    const val = prefs[key] || 'window';
+    return ['window', 'system', 'none'].map(v =>
+      `<option value="${v}"${v === val ? ' selected' : ''}>${v}</option>`
+    ).join('');
+  };
+
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-header">
+        <div class="profile-avatar-wrap">${avatarBig}
+          <label class="profile-avatar-upload" title="Upload avatar">
+            &#x1F4F7;
+            <input type="file" accept="image/*" onchange="uploadAvatar(this)" style="display:none;">
+          </label>
+        </div>
+        <div class="profile-name-section">
+          <div class="profile-username">${escapeHtml(state.currentUser)}</div>
+        </div>
+      </div>
+      <div class="profile-field">
+        <label class="profile-label">Status</label>
+        <input type="text" id="settings-status-input" value="${statusVal}" maxlength="128" placeholder="What's on your mind?">
+      </div>
+      <div class="profile-field">
+        <label class="profile-label">About</label>
+        <textarea id="settings-about-input" maxlength="1024" rows="3" placeholder="Tell others about yourself">${aboutVal}</textarea>
+      </div>
+      <div class="profile-edit-section" style="margin-bottom:1rem;">
+        <button class="profile-save-btn" onclick="saveUserSettings()">Save Profile</button>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:0.8rem;">
+        <div class="profile-label" style="margin-bottom:0.5rem;">Notifications</div>
+        <div class="notif-setting"><label>@mention</label><select onchange="setNotifPref('notify_mention',this.value)">${optionsHtml('notify_mention')}</select></div>
+        <div class="notif-setting"><label>@channel</label><select onchange="setNotifPref('notify_channel_mention',this.value)">${optionsHtml('notify_channel_mention')}</select></div>
+        <div class="notif-setting"><label>@server</label><select onchange="setNotifPref('notify_server_mention',this.value)">${optionsHtml('notify_server_mention')}</select></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('user-settings-overlay').classList.add('active');
+  // Fetch fresh profile data
+  send('GetProfile', { username: state.currentUser });
+}
+
+export function closeUserSettings() {
+  document.getElementById('user-settings-overlay').classList.remove('active');
+}
+
+export function saveUserSettings() {
+  const statusInput = document.getElementById('settings-status-input');
+  const aboutInput = document.getElementById('settings-about-input');
+  const oldProfile = state.profileCache[state.currentUser] || {};
+
+  if (statusInput && statusInput.value !== (oldProfile.status || '')) {
+    send('UpdateProfile', { field: 'status', value: statusInput.value });
+  }
+  if (aboutInput && aboutInput.value !== (oldProfile.about || '')) {
+    send('UpdateProfile', { field: 'about', value: aboutInput.value });
+  }
+
+  closeUserSettings();
+}
+
+// ── Right-click context menu ──
+
+export function initContextMenu() {
+  const messagesEl = document.getElementById('messages');
+  if (!messagesEl) return;
+
+  // Create the context menu element
+  const menu = document.createElement('div');
+  menu.id = 'msg-context-menu';
+  menu.className = 'msg-context-menu';
+  menu.style.display = 'none';
+  document.body.appendChild(menu);
+
+  messagesEl.addEventListener('contextmenu', (e) => {
+    const msgEl = e.target.closest('.msg[data-msg-id]');
+    if (!msgEl) return;
+
+    e.preventDefault();
+    const msgId = msgEl.getAttribute('data-msg-id');
+    const author = msgEl.getAttribute('data-author');
+    const isOwn = author === state.currentUser;
+    const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[state.currentChannel] === state.currentUser);
+    const isPinned = !!msgEl.querySelector('.pinned-badge');
+    const isEncrypted = state.encryptedChannels.has(state.currentChannel);
+
+    const quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👀'];
+    let items = '';
+    if (!isEncrypted) {
+      items += `<div class="ctx-quick-react">${quickEmojis.map(e =>
+        `<button class="ctx-react-emoji" data-emoji="${e}">${e}</button>`
+      ).join('')}</div>`;
+    }
+    items += `<div class="ctx-item" data-action="reply">Reply</div>`;
+    if (!isEncrypted) items += `<div class="ctx-item" data-action="react">React...</div>`;
+    if (canPin) items += `<div class="ctx-item" data-action="pin">${isPinned ? 'Unpin' : 'Pin'}</div>`;
+    if (isOwn) items += `<div class="ctx-item" data-action="edit">Edit</div>`;
+    if (isOwn || state.isAdmin) items += `<div class="ctx-item ctx-danger" data-action="delete">Delete</div>`;
+
+    menu.innerHTML = items;
+    menu.style.display = 'block';
+
+    // Position near click, but keep on screen
+    const x = Math.min(e.clientX, window.innerWidth - 160);
+    const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10);
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+
+    const handleAction = (ev) => {
+      // Quick-react emoji buttons
+      const emojiBtn = ev.target.closest('.ctx-react-emoji');
+      if (emojiBtn) {
+        menu.style.display = 'none';
+        send('AddReaction', { message_id: msgId, emoji: emojiBtn.getAttribute('data-emoji') });
+        return;
+      }
+
+      const item = ev.target.closest('.ctx-item');
+      if (!item) return;
+      menu.style.display = 'none';
+      const action = item.getAttribute('data-action');
+      switch (action) {
+        case 'reply': window.startReply(msgId); break;
+        case 'react': {
+          // Open full reaction picker anchored to the message
+          const reactBtn = msgEl.querySelector('.react-btn');
+          if (reactBtn) {
+            reactBtn.click();
+          } else {
+            openReactionPicker(msgEl, (emoji) => {
+              send('AddReaction', { message_id: msgId, emoji });
+            });
+          }
+          break;
+        }
+        case 'pin': window.togglePinMessage(msgId); break;
+        case 'edit': window.startEditMessage(msgId); break;
+        case 'delete': window.deleteMessage(msgId); break;
+      }
+    };
+
+    menu.onclick = handleAction;
+  });
+
+  // Dismiss on click elsewhere or Escape
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target)) menu.style.display = 'none';
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') menu.style.display = 'none';
+  });
 }
 
 export function requestChannelKey() {

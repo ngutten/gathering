@@ -85,6 +85,7 @@ const state = {
 
   // Channel metadata
   channelCreators: {},
+  pinnedMessages: {},  // { channel: [msg, ...] }
 
   // Profile cache: { username: { avatar_id, status, about } }
   profileCache: {},

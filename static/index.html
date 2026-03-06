@@ -86,7 +86,7 @@
       </div>
       <div class="sidebar-section" style="border-top:1px solid var(--border);padding-top:0.3rem;">
         <button class="files-btn" onclick="openFileManager()">Files</button>
-        <div id="notification-settings" class="notification-settings"></div>
+        <button class="files-btn" onclick="openUserSettings()">Settings</button>
       </div>
       <div class="sidebar-bottom">
         <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code><span id="no-key-label" style="font-size:0.65rem;color:var(--red);">No key set</span></div>
@@ -107,18 +107,22 @@
     <div class="chat-main">
       <div class="chat-header">
         <h2 id="chat-channel-name">#general</h2>
+        <div class="channel-header-tools">
+          <button class="ch-tool-btn" onclick="togglePinnedBanner()" title="Pinned Messages">&#x1F4CC;</button>
+          <button class="ch-tool-btn" onclick="openChannelSettings()" title="Channel Settings">&#x2699;</button>
+        </div>
         <span class="typing" id="typing-indicator"></span>
         <button class="request-key-btn" id="request-key-btn" onclick="requestChannelKey()" style="display:none;" title="Request encryption key for this channel">Request Key</button>
-        <button class="search-toggle-btn" onclick="openPinnedPanel()" title="Pinned Messages">&#x1F4CC;</button>
-        <button class="search-toggle-btn" onclick="openChannelSettings()" title="Channel Settings">&#x2699;</button>
-        <button class="search-toggle-btn" onclick="toggleSearch()" title="Search">&#x1F50D;</button>
-        <div style="position:relative;">
-          <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets">&#x29C8;</button>
-          <div class="widget-picker" id="widget-picker" style="display:none;"></div>
-        </div>
-        <div class="view-toggle">
-          <button id="view-chat-btn" class="active" onclick="switchView('chat')">Chat</button>
-          <button id="view-topics-btn" onclick="switchView('topics')">Topics</button>
+        <div class="chat-header-right">
+          <button class="search-toggle-btn" onclick="toggleSearch()" title="Search">&#x1F50D;</button>
+          <div style="position:relative;">
+            <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets">&#x29C8;</button>
+            <div class="widget-picker" id="widget-picker" style="display:none;"></div>
+          </div>
+          <div class="view-toggle">
+            <button id="view-chat-btn" class="active" onclick="switchView('chat')">Chat</button>
+            <button id="view-topics-btn" onclick="switchView('topics')">Topics</button>
+          </div>
         </div>
       </div>
       <div class="search-bar" id="search-bar" style="display:none;">
@@ -144,6 +148,14 @@
 
       <!-- Chat view -->
       <div id="chat-view">
+        <div class="pinned-banner" id="pinned-banner" style="display:none;">
+          <div class="pinned-banner-bar" id="pinned-banner-bar" onclick="togglePinnedBanner()"
+            <span class="pinned-banner-icon">&#x1F4CC;</span>
+            <span class="pinned-banner-text" id="pinned-banner-text"></span>
+            <span class="pinned-banner-toggle" id="pinned-banner-toggle">&#x25BC;</span>
+          </div>
+          <div class="pinned-banner-list" id="pinned-banner-list" style="display:none;"></div>
+        </div>
         <div class="messages" id="messages"></div>
         <div class="reply-banner" id="reply-banner">
           <span class="reply-banner-text">Replying to...</span>
@@ -314,6 +326,18 @@
       <button class="admin-panel-close" onclick="closeProfile()">&times;</button>
     </div>
     <div class="admin-tab-content" id="profile-content" data-profile-user="">
+    </div>
+  </div>
+</div>
+
+<!-- User Settings Overlay -->
+<div class="admin-overlay" id="user-settings-overlay" onclick="if(event.target===this)closeUserSettings()">
+  <div class="admin-panel" style="width:440px;">
+    <div class="admin-panel-header">
+      <h2>Settings</h2>
+      <button class="admin-panel-close" onclick="closeUserSettings()">&times;</button>
+    </div>
+    <div class="admin-tab-content" id="user-settings-content">
     </div>
   </div>
 </div>

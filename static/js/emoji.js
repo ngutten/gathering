@@ -267,7 +267,7 @@ export function openReactionPicker(anchorEl, callback) {
   reactionPickerEl.style.display = 'flex';
   const searchInput = reactionPickerEl.querySelector('.emoji-search');
   if (searchInput) { searchInput.value = ''; searchInput.focus(); }
-  showCategory(Object.keys(emojiCategories)[0], reactionPickerEl);
+  showReactionCategory(Object.keys(emojiCategories)[0], reactionPickerEl);
 }
 
 export function closeReactionPicker() {

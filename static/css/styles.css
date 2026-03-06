@@ -70,6 +70,13 @@
   .chat-header h2 { font-size: 0.95rem; }
   .chat-header .typing { font-size: 0.75rem; color: var(--text2); font-style: italic; }
 
+  /* Channel header tool buttons (pin, settings) grouped after name */
+  .channel-header-tools { display: flex; gap: 0.15rem; margin-left: 0.3rem; flex-shrink: 0; }
+  .ch-tool-btn { background: none; border: none; color: var(--text2); cursor: pointer;
+                 padding: 0.15rem 0.3rem; font-size: 0.8rem; line-height: 1; border-radius: 3px; }
+  .ch-tool-btn:hover { color: var(--accent); background: var(--bg3); }
+  .chat-header-right { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+
   .messages { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; display: flex;
               flex-direction: column; gap: 0.15rem; }
   .msg { padding: 0.3rem 0; line-height: 1.4; position: relative; }
@@ -80,6 +87,26 @@
   .msg .edited { color: var(--text2); font-size: 0.65rem; margin-left: 0.3rem; }
   .msg .body { margin-top: 0.1rem; font-size: 0.85rem; word-wrap: break-word; }
   .msg.system { color: var(--text2); font-style: italic; font-size: 0.8rem; }
+
+  /* ── Pinned banner ─── */
+  .pinned-banner { border-bottom: 1px solid var(--border); background: var(--bg2); flex-shrink: 0; }
+  .pinned-banner-bar { display: flex; align-items: center; gap: 0.4rem; padding: 0.35rem 1rem;
+                       cursor: pointer; font-size: 0.8rem; color: var(--text2); user-select: none; }
+  .pinned-banner-bar:hover { background: var(--bg3); }
+  .pinned-banner-icon { font-size: 0.85rem; }
+  .pinned-banner-text { flex: 1; }
+  .pinned-banner-text strong { color: var(--text); }
+  .pinned-banner-toggle { font-size: 0.6rem; transition: transform 0.2s; }
+  .pinned-banner-toggle.expanded { transform: rotate(180deg); }
+  .pinned-banner-list { max-height: 250px; overflow-y: auto; border-top: 1px solid var(--border); }
+  .pinned-banner-item { padding: 0.4rem 1rem; border-bottom: 1px solid var(--border); cursor: pointer;
+                        font-size: 0.8rem; }
+  .pinned-banner-item:last-child { border-bottom: none; }
+  .pinned-banner-item:hover { background: var(--bg3); }
+  .pinned-banner-item .meta { font-size: 0.7rem; margin-bottom: 0.15rem; }
+  .pinned-banner-item .body { font-size: 0.8rem; color: var(--text); overflow: hidden;
+                              text-overflow: ellipsis; display: -webkit-box;
+                              -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
   /* Message hover actions */
   .msg-actions { display: none; position: absolute; top: 0; right: 0; gap: 0.2rem;
@@ -461,7 +488,7 @@
   /* ── Search ─── */
   .search-toggle-btn { background: none; border: 1px solid var(--border); border-radius: 4px;
                        color: var(--text2); cursor: pointer; padding: 0.2rem 0.4rem; font-size: 0.8rem;
-                       line-height: 1; margin-left: auto; }
+                       line-height: 1; }
   .search-toggle-btn:hover { color: var(--accent); border-color: var(--accent); }
   .request-key-btn { background: none; border: 1px solid var(--orange); border-radius: 4px;
                      color: var(--orange); cursor: pointer; padding: 0.2rem 0.5rem; font-size: 0.7rem;
@@ -771,3 +798,17 @@
   .profile-edit-btn { background: var(--bg3); color: var(--text); }
   .profile-save-btn { background: var(--accent); color: #000; border-color: var(--accent); }
   .profile-cancel-btn { background: var(--bg3); color: var(--text2); }
+
+  /* ── Right-click context menu ─── */
+  .msg-context-menu { position: fixed; z-index: 250; background: var(--bg2); border: 1px solid var(--border);
+                      border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); min-width: 140px;
+                      padding: 0.25rem 0; overflow: hidden; }
+  .ctx-quick-react { display: flex; gap: 0.15rem; padding: 0.35rem 0.5rem;
+                     border-bottom: 1px solid var(--border); }
+  .ctx-react-emoji { background: none; border: none; font-size: 1.1rem; cursor: pointer;
+                     padding: 0.15rem 0.25rem; border-radius: 4px; line-height: 1; }
+  .ctx-react-emoji:hover { background: var(--bg3); transform: scale(1.2); }
+  .ctx-item { padding: 0.4rem 0.8rem; font-size: 0.8rem; cursor: pointer; color: var(--text);
+              font-family: inherit; }
+  .ctx-item:hover { background: var(--bg3); color: var(--accent); }
+  .ctx-danger:hover { color: var(--red); }

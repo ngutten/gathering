@@ -3,7 +3,7 @@
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -257,6 +257,8 @@ export function handleServerMsg(msg) {
       if (msg.channel === state.currentChannel) {
         updatePinInDOM(msg);
         appendSystem(`${msg.pinned_by} ${msg.pinned ? 'pinned' : 'unpinned'} a message`);
+        // Refresh pinned messages to update the banner
+        send('GetPinnedMessages', { channel: msg.channel });
       }
       break;
 
@@ -531,6 +533,10 @@ export function handleServerMsg(msg) {
       if (!state.profileCache[msg.username]) state.profileCache[msg.username] = {};
       state.profileCache[msg.username][msg.field] = msg.value;
       refreshOnlineUsersSidebar();
+      // Refresh avatars in chat messages when avatar changes
+      if (msg.field === 'avatar_id') {
+        refreshAvatarsInDOM(msg.username);
+      }
       // Refresh profile modal if open for this user
       {
         const profileEl = document.getElementById('profile-content');

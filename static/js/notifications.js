@@ -66,18 +66,8 @@ function showSystemNotification(title, body, channel) {
 }
 
 export function renderNotificationSettings() {
-  const el = document.getElementById('notification-settings');
-  if (!el) return;
-  const prefs = state.notificationPrefs;
-  const options = (key) => {
-    const val = prefs[key] || 'window';
-    return ['window', 'system', 'none'].map(v =>
-      `<option value="${v}"${v === val ? ' selected' : ''}>${v}</option>`
-    ).join('');
-  };
-  el.innerHTML = `<div class="notif-setting"><label>@mention</label><select onchange="setNotifPref('notify_mention',this.value)">${options('notify_mention')}</select></div>
-    <div class="notif-setting"><label>@channel</label><select onchange="setNotifPref('notify_channel_mention',this.value)">${options('notify_channel_mention')}</select></div>
-    <div class="notif-setting"><label>@server</label><select onchange="setNotifPref('notify_server_mention',this.value)">${options('notify_server_mention')}</select></div>`;
+  // Notification settings are now shown in the User Settings panel (chat-ui.js)
+  // This function is kept as a no-op for the message handler call
 }
 
 export function setNotifPref(key, value) {
