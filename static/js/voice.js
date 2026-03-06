@@ -78,6 +78,7 @@ export function cleanupVoice() {
     }
   }
   state.peerConnections = {};
+  state.userGainNodes = {};
   if (state.localStream) {
     state.localStream.getTracks().forEach(t => t.stop());
     state.localStream = null;
@@ -226,6 +227,19 @@ export function createPeerConnection(targetUser, isInitiator) {
     const stream = e.streams[0];
 
     if (track.kind === 'audio') {
+      // Route through GainNode for per-user volume control
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const gainNode = audioCtx.createGain();
+      const vol = state.userVolumes[targetUser] ?? 1.0;
+      gainNode.gain.value = vol;
+      state.userGainNodes[targetUser] = gainNode;
+
+      // Create a destination stream that includes the gain-adjusted audio
+      const dest = audioCtx.createMediaStreamDestination();
+      source.connect(gainNode);
+      gainNode.connect(dest);
+
       let audio = document.getElementById('audio-' + targetUser);
       if (!audio) {
         audio = document.createElement('audio');
@@ -234,7 +248,8 @@ export function createPeerConnection(targetUser, isInitiator) {
         audio.autoplay = true;
         document.body.appendChild(audio);
       }
-      audio.srcObject = stream;
+      audio.srcObject = dest.stream;
+      audio.volume = vol;
       if (state.isDeafened) audio.muted = true;
       startRemoteSpeakingDetection(targetUser, stream);
     } else if (track.kind === 'video') {
@@ -499,10 +514,43 @@ export function renderVoiceMembers() {
       if (vs.video_on) icons += '<span class="voice-icon" title="Camera on">&#x1F4F7;</span>';
       if (vs.screen_share_on) icons += '<span class="voice-icon" title="Sharing screen">&#x1F5A5;</span>';
     }
+    const isMe = u === state.currentUser;
+    const vol = state.userVolumes[u] ?? 1.0;
+    const volSlider = isMe ? '' :
+      `<div class="voice-volume-row">` +
+        `<input type="range" min="0" max="100" value="${Math.round(vol * 100)}" ` +
+          `class="voice-volume-slider" data-user="${escapeHtml(u)}" ` +
+          `title="Volume: ${Math.round(vol * 100)}%">` +
+        `<span class="voice-volume-label">${Math.round(vol * 100)}%</span>` +
+      `</div>`;
     return `<div class="voice-member" id="voice-member-${u}">` +
-      `<span class="voice-dot"></span>` +
-      `<span class="voice-name">${escapeHtml(u)}</span>${icons}</div>`;
+      `<div class="voice-member-info">` +
+        `<span class="voice-dot"></span>` +
+        `<span class="voice-name">${escapeHtml(u)}</span>${icons}` +
+      `</div>${volSlider}</div>`;
   }).join('');
+
+  // Attach volume slider listeners
+  el.querySelectorAll('.voice-volume-slider').forEach(slider => {
+    slider.addEventListener('input', (e) => {
+      const user = e.target.dataset.user;
+      const vol = parseInt(e.target.value) / 100;
+      setUserVolume(user, vol);
+      const label = e.target.parentElement.querySelector('.voice-volume-label');
+      if (label) label.textContent = Math.round(vol * 100) + '%';
+      e.target.title = 'Volume: ' + Math.round(vol * 100) + '%';
+    });
+  });
+}
+
+export function setUserVolume(user, vol) {
+  state.userVolumes[user] = vol;
+  // Update GainNode if exists
+  const gainNode = state.userGainNodes[user];
+  if (gainNode) gainNode.gain.value = vol;
+  // Also update audio element volume as fallback
+  const audio = document.getElementById('audio-' + user);
+  if (audio) audio.volume = vol;
 }
 
 // ── Mute/Deafen ──

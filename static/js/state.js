@@ -39,6 +39,8 @@ const state = {
   localAnalyser: null,
   localAnalyserInterval: null,
   remoteAnalysers: {},
+  userVolumes: {},        // { username: 0.0-1.0 } per-user volume
+  userGainNodes: {},      // { username: GainNode } for per-user volume control
 
   // Video state
   cameraOn: false,
