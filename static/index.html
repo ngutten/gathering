@@ -109,6 +109,7 @@
         <h2 id="chat-channel-name">#general</h2>
         <span class="typing" id="typing-indicator"></span>
         <button class="request-key-btn" id="request-key-btn" onclick="requestChannelKey()" style="display:none;" title="Request encryption key for this channel">Request Key</button>
+        <button class="search-toggle-btn" onclick="openPinnedPanel()" title="Pinned Messages">&#x1F4CC;</button>
         <button class="search-toggle-btn" onclick="openChannelSettings()" title="Channel Settings">&#x2699;</button>
         <button class="search-toggle-btn" onclick="toggleSearch()" title="Search">&#x1F50D;</button>
         <div style="position:relative;">
@@ -257,6 +258,19 @@
     </div>
     <div class="admin-tab-content" id="files-content">
       <div style="color:var(--text2);font-size:0.8rem;">Loading files...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Pinned Messages Overlay -->
+<div class="admin-overlay" id="pinned-messages-overlay" onclick="if(event.target===this)closePinnedPanel()">
+  <div class="admin-panel">
+    <div class="admin-panel-header">
+      <h2>Pinned Messages</h2>
+      <button class="admin-panel-close" onclick="closePinnedPanel()">&times;</button>
+    </div>
+    <div class="admin-tab-content" id="pinned-messages-content">
+      <div style="color:var(--text2);font-size:0.8rem;">Loading...</div>
     </div>
   </div>
 </div>

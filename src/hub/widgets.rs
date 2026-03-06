@@ -29,6 +29,12 @@ impl Hub {
             return;
         }
 
+        // Widgets disabled on encrypted channels (data leak risk)
+        if self.db.is_channel_encrypted(&channel) {
+            self.send_error(id, "Widgets are not supported on encrypted channels").await;
+            return;
+        }
+
         let clients = self.clients.lock().await;
         let (username, in_channel) = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
@@ -62,6 +68,11 @@ impl Hub {
     ) {
         if widget_id.len() > MAX_WIDGET_ID_LEN {
             self.send_error(id, "Widget ID too long").await;
+            return;
+        }
+
+        if self.db.is_channel_encrypted(&channel) {
+            self.send_error(id, "Widgets are not supported on encrypted channels").await;
             return;
         }
 
@@ -101,6 +112,11 @@ impl Hub {
     ) {
         if widget_id.len() > MAX_WIDGET_ID_LEN {
             self.send_error(id, "Widget ID too long").await;
+            return;
+        }
+
+        if self.db.is_channel_encrypted(&channel) {
+            self.send_error(id, "Widgets are not supported on encrypted channels").await;
             return;
         }
 

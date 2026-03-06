@@ -5,6 +5,7 @@ mod dms;
 mod encryption;
 mod files;
 mod messages;
+mod reactions;
 mod topics;
 mod voice;
 mod widgets;
@@ -160,7 +161,8 @@ impl Hub {
         Self::broadcast_all_inner(&clients, &msg, None);
 
         // Send history for general
-        let history = self.db.get_history("general", DEFAULT_HISTORY_LIMIT);
+        let mut history = self.db.get_history("general", DEFAULT_HISTORY_LIMIT);
+        Self::attach_reactions(&self.db, &mut history);
         if let Some(client) = clients.get(&id) {
             if let Err(e) = Self::send_to(
                 &client.tx,
@@ -276,6 +278,22 @@ impl Hub {
 
             ClientMsg::PinTopic { topic_id, pinned } => {
                 self.handle_pin_topic(id, topic_id, pinned).await;
+            }
+
+            ClientMsg::AddReaction { message_id, emoji } => {
+                self.handle_add_reaction(id, message_id, emoji).await;
+            }
+
+            ClientMsg::RemoveReaction { message_id, emoji } => {
+                self.handle_remove_reaction(id, message_id, emoji).await;
+            }
+
+            ClientMsg::PinMessage { message_id, pinned } => {
+                self.handle_pin_message(id, message_id, pinned).await;
+            }
+
+            ClientMsg::GetPinnedMessages { channel } => {
+                self.handle_get_pinned_messages(id, channel).await;
             }
 
             ClientMsg::EditMessage { message_id, content } => {
@@ -571,7 +589,8 @@ impl Hub {
                     .count();
                 let encrypted = self.db.is_channel_encrypted(&name);
                 let restricted = self.db.is_channel_restricted(&name);
-                ChannelInfo { name, user_count, encrypted, channel_type, restricted }
+                let created_by = self.db.get_channel_creator(&name);
+                ChannelInfo { name, user_count, encrypted, channel_type, restricted, created_by }
             })
             .collect()
     }

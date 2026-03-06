@@ -3,7 +3,7 @@
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -74,7 +74,10 @@ export function handleServerMsg(msg) {
 
     case 'ChannelList':
       state.channels = msg.channels;
-      state.channels.forEach(ch => { if (ch.encrypted) state.encryptedChannels.add(ch.name); });
+      state.channels.forEach(ch => {
+        if (ch.encrypted) state.encryptedChannels.add(ch.name);
+        if (ch.created_by) state.channelCreators[ch.name] = ch.created_by;
+      });
       renderChannels();
       break;
 
@@ -236,6 +239,23 @@ export function handleServerMsg(msg) {
       if (delEl) delEl.remove();
       break;
     }
+
+    case 'ReactionUpdated':
+      if (msg.channel === state.currentChannel) {
+        updateReactionInDOM(msg);
+      }
+      break;
+
+    case 'MessagePinned':
+      if (msg.channel === state.currentChannel) {
+        updatePinInDOM(msg);
+        appendSystem(`${msg.pinned_by} ${msg.pinned ? 'pinned' : 'unpinned'} a message`);
+      }
+      break;
+
+    case 'PinnedMessages':
+      renderPinnedPanel(msg);
+      break;
 
     case 'TopicEdited':
       if (msg.channel === state.currentChannel) {

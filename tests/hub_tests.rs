@@ -449,3 +449,235 @@ async fn leave_channel_broadcasts() {
     let left = find_msg(&bob_msgs, |m| matches!(m, ServerMsg::UserLeft { channel, username } if channel == "general" && username == "alice"));
     assert!(left.is_some(), "Bob should see Alice left general");
 }
+
+// ── Reactions ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn add_reaction_broadcast() {
+    let (hub, db) = setup();
+    let (alice_id, mut alice_rx) = connect_user(&hub, &db, "alice").await;
+    let (_bob_id, mut bob_rx) = connect_user(&hub, &db, "bob").await;
+    drain_messages(&mut alice_rx);
+    drain_messages(&mut bob_rx);
+
+    // Alice sends a message
+    hub.handle_message(alice_id, ClientMsg::Send {
+        channel: "general".into(),
+        content: "react to this".into(),
+        ttl_secs: None,
+        attachments: None,
+        encrypted: false,
+        reply_to: None,
+    }).await;
+
+    let alice_msgs = drain_messages(&mut alice_rx);
+    let msg = find_msg(&alice_msgs, |m| matches!(m, ServerMsg::Message { content, .. } if content == "react to this"));
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = msg { id.clone() } else { panic!("no message") };
+    drain_messages(&mut bob_rx);
+
+    // Bob reacts
+    hub.handle_message(_bob_id, ClientMsg::AddReaction { message_id: msg_id.clone(), emoji: "👍".into() }).await;
+
+    let bob_msgs = drain_messages(&mut bob_rx);
+    let reaction = find_msg(&bob_msgs, |m| matches!(m, ServerMsg::ReactionUpdated { added: true, emoji, username, .. } if emoji == "👍" && username == "bob"));
+    assert!(reaction.is_some(), "Bob should see reaction broadcast");
+
+    let alice_msgs = drain_messages(&mut alice_rx);
+    let alice_reaction = find_msg(&alice_msgs, |m| matches!(m, ServerMsg::ReactionUpdated { added: true, .. }));
+    assert!(alice_reaction.is_some(), "Alice should see reaction broadcast");
+}
+
+#[tokio::test]
+async fn remove_reaction_broadcast() {
+    let (hub, db) = setup();
+    let (alice_id, mut alice_rx) = connect_user(&hub, &db, "alice").await;
+    drain_messages(&mut alice_rx);
+
+    // Send message and add reaction
+    hub.handle_message(alice_id, ClientMsg::Send {
+        channel: "general".into(),
+        content: "test".into(),
+        ttl_secs: None, attachments: None, encrypted: false, reply_to: None,
+    }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = find_msg(&msgs, |m| matches!(m, ServerMsg::Message { .. })) { id.clone() } else { panic!("no message") };
+
+    hub.handle_message(alice_id, ClientMsg::AddReaction { message_id: msg_id.clone(), emoji: "👍".into() }).await;
+    drain_messages(&mut alice_rx);
+
+    // Remove reaction
+    hub.handle_message(alice_id, ClientMsg::RemoveReaction { message_id: msg_id.clone(), emoji: "👍".into() }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let removed = find_msg(&msgs, |m| matches!(m, ServerMsg::ReactionUpdated { added: false, emoji, .. } if emoji == "👍"));
+    assert!(removed.is_some(), "Should see reaction removed broadcast");
+}
+
+#[tokio::test]
+async fn reactions_included_in_history() {
+    let (hub, db) = setup();
+    let (alice_id, mut alice_rx) = connect_user(&hub, &db, "alice").await;
+    drain_messages(&mut alice_rx);
+
+    // Send message
+    hub.handle_message(alice_id, ClientMsg::Send {
+        channel: "general".into(),
+        content: "has reactions".into(),
+        ttl_secs: None, attachments: None, encrypted: false, reply_to: None,
+    }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = find_msg(&msgs, |m| matches!(m, ServerMsg::Message { .. })) { id.clone() } else { panic!("no message") };
+
+    // Add reaction
+    hub.handle_message(alice_id, ClientMsg::AddReaction { message_id: msg_id.clone(), emoji: "🎉".into() }).await;
+    drain_messages(&mut alice_rx);
+
+    // Request history
+    hub.handle_message(alice_id, ClientMsg::History { channel: "general".into(), limit: None }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let history = find_msg(&msgs, |m| matches!(m, ServerMsg::History { .. }));
+    if let Some(ServerMsg::History { messages, .. }) = history {
+        let msg = messages.iter().find(|m| m.id == msg_id).expect("message should be in history");
+        let reactions = msg.reactions.as_ref().expect("reactions should be present");
+        assert!(reactions.contains_key("🎉"));
+        assert!(reactions.get("🎉").unwrap().contains(&"alice".to_string()));
+    } else {
+        panic!("Expected History response");
+    }
+}
+
+#[tokio::test]
+async fn react_to_unjoined_channel_rejected() {
+    let (hub, db) = setup();
+    let (alice_id, mut alice_rx) = connect_user(&hub, &db, "alice").await;
+    drain_messages(&mut alice_rx);
+
+    // Store a message in a different channel directly in DB
+    db.ensure_channel("other");
+    let ts = chrono::Utc::now();
+    db.store_message("other-msg", "other", "alice", "test", &ts, None, None, false, None, None);
+
+    // Try to react without joining that channel
+    hub.handle_message(alice_id, ClientMsg::AddReaction { message_id: "other-msg".into(), emoji: "👍".into() }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let err = find_msg(&msgs, |m| matches!(m, ServerMsg::Error { .. }));
+    assert!(err.is_some(), "Should get error for reacting to unjoined channel message");
+}
+
+// ── Message Pinning ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn pin_message_by_admin() {
+    let (hub, db) = setup();
+    // Create admin user
+    db.register("admin", "password123").unwrap();
+    db.upsert_role("admin", &["*".into()]);
+    db.assign_role("admin", "admin").unwrap();
+    let token = db.login("admin", "password123").unwrap();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let admin_id = hub.connect(tx).await;
+    hub.handle_message(admin_id, ClientMsg::Auth { token }).await;
+    drain_messages(&mut rx);
+
+    // Send a message
+    hub.handle_message(admin_id, ClientMsg::Send {
+        channel: "general".into(),
+        content: "pin me".into(),
+        ttl_secs: None, attachments: None, encrypted: false, reply_to: None,
+    }).await;
+    let msgs = drain_messages(&mut rx);
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = find_msg(&msgs, |m| matches!(m, ServerMsg::Message { .. })) { id.clone() } else { panic!("no message") };
+
+    // Pin it
+    hub.handle_message(admin_id, ClientMsg::PinMessage { message_id: msg_id.clone(), pinned: true }).await;
+    let msgs = drain_messages(&mut rx);
+    let pinned = find_msg(&msgs, |m| matches!(m, ServerMsg::MessagePinned { pinned: true, .. }));
+    assert!(pinned.is_some(), "Should see MessagePinned broadcast");
+}
+
+#[tokio::test]
+async fn pin_message_by_non_admin_rejected() {
+    let (hub, db) = setup();
+    let (alice_id, mut alice_rx) = connect_user(&hub, &db, "alice").await;
+    drain_messages(&mut alice_rx);
+
+    // Send a message
+    hub.handle_message(alice_id, ClientMsg::Send {
+        channel: "general".into(),
+        content: "try pin".into(),
+        ttl_secs: None, attachments: None, encrypted: false, reply_to: None,
+    }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = find_msg(&msgs, |m| matches!(m, ServerMsg::Message { .. })) { id.clone() } else { panic!("no message") };
+
+    // Try to pin (should fail — alice is not admin and not channel creator)
+    hub.handle_message(alice_id, ClientMsg::PinMessage { message_id: msg_id.clone(), pinned: true }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let err = find_msg(&msgs, |m| matches!(m, ServerMsg::Error { message } if message.contains("Permission denied")));
+    assert!(err.is_some(), "Non-admin should get permission denied, got: {msgs:?}");
+}
+
+#[tokio::test]
+async fn pin_message_by_channel_creator() {
+    let (hub, db) = setup();
+    let (alice_id, mut alice_rx) = connect_user(&hub, &db, "alice").await;
+    drain_messages(&mut alice_rx);
+
+    // Alice creates a channel (by joining it)
+    hub.handle_message(alice_id, ClientMsg::Join { channel: "alice-chan".into() }).await;
+    drain_messages(&mut alice_rx);
+
+    // Send a message
+    hub.handle_message(alice_id, ClientMsg::Send {
+        channel: "alice-chan".into(),
+        content: "pin this".into(),
+        ttl_secs: None, attachments: None, encrypted: false, reply_to: None,
+    }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = find_msg(&msgs, |m| matches!(m, ServerMsg::Message { .. })) { id.clone() } else { panic!("no message") };
+
+    // Pin it (should succeed — alice is channel creator)
+    hub.handle_message(alice_id, ClientMsg::PinMessage { message_id: msg_id.clone(), pinned: true }).await;
+    let msgs = drain_messages(&mut alice_rx);
+    let pinned = find_msg(&msgs, |m| matches!(m, ServerMsg::MessagePinned { pinned: true, .. }));
+    assert!(pinned.is_some(), "Channel creator should be able to pin");
+}
+
+#[tokio::test]
+async fn get_pinned_messages_via_hub() {
+    let (hub, db) = setup();
+    // Create admin
+    db.register("admin", "password123").unwrap();
+    db.upsert_role("admin", &["*".into()]);
+    db.assign_role("admin", "admin").unwrap();
+    let token = db.login("admin", "password123").unwrap();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let admin_id = hub.connect(tx).await;
+    hub.handle_message(admin_id, ClientMsg::Auth { token }).await;
+    drain_messages(&mut rx);
+
+    // Send and pin a message
+    hub.handle_message(admin_id, ClientMsg::Send {
+        channel: "general".into(),
+        content: "pinned msg".into(),
+        ttl_secs: None, attachments: None, encrypted: false, reply_to: None,
+    }).await;
+    let msgs = drain_messages(&mut rx);
+    let msg_id = if let Some(ServerMsg::Message { id, .. }) = find_msg(&msgs, |m| matches!(m, ServerMsg::Message { .. })) { id.clone() } else { panic!("no message") };
+
+    hub.handle_message(admin_id, ClientMsg::PinMessage { message_id: msg_id.clone(), pinned: true }).await;
+    drain_messages(&mut rx);
+
+    // Get pinned messages
+    hub.handle_message(admin_id, ClientMsg::GetPinnedMessages { channel: "general".into() }).await;
+    let msgs = drain_messages(&mut rx);
+    let pinned = find_msg(&msgs, |m| matches!(m, ServerMsg::PinnedMessages { .. }));
+    if let Some(ServerMsg::PinnedMessages { messages, .. }) = pinned {
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, msg_id);
+        assert!(messages[0].pinned);
+    } else {
+        panic!("Expected PinnedMessages response, got: {msgs:?}");
+    }
+}

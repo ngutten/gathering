@@ -92,6 +92,24 @@
   .msg-actions button:hover { background: var(--bg3); color: var(--text); }
   .msg-actions button.del-btn:hover { color: var(--red); }
 
+  /* Pinned badge */
+  .pinned-badge { margin-right: 0.3rem; font-size: 0.75rem; }
+
+  /* Reactions bar */
+  .reactions-bar { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; }
+  .reactions-bar .reaction { background: var(--bg3); border: 1px solid var(--border); border-radius: 12px;
+                             padding: 0.1rem 0.4rem; font-size: 0.75rem; cursor: pointer;
+                             color: var(--text); font-family: inherit; }
+  .reactions-bar .reaction:hover { border-color: var(--accent); }
+  .reactions-bar .reaction.mine { border-color: var(--accent2); background: rgba(31,111,235,0.15); }
+
+  /* Pinned messages panel */
+  .pinned-msg { padding: 0.5rem; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .pinned-msg:hover { background: var(--bg3); }
+  .pinned-msg:last-child { border-bottom: none; }
+  .pinned-msg .meta { font-size: 0.75rem; margin-bottom: 0.2rem; }
+  .pinned-msg .body { font-size: 0.8rem; }
+
   /* Edit banner */
   .edit-banner { display: none; padding: 0.3rem 0.7rem; background: var(--bg3);
                  border-bottom: 1px solid var(--accent2); font-size: 0.75rem;

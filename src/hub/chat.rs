@@ -1,9 +1,10 @@
 use chrono::{Duration, Utc};
 use regex::Regex;
+use std::collections::BTreeMap;
 
 use super::Hub;
 use crate::db::Db;
-use crate::protocol::{ReplyRef, ServerMsg};
+use crate::protocol::{HistoryMessage, ReplyRef, ServerMsg};
 
 const MAX_MESSAGE_SIZE: usize = 32 * 1024; // 32KB
 const MAX_CHANNEL_NAME_LEN: usize = 64;
@@ -205,7 +206,8 @@ impl Hub {
         };
 
         // Send history
-        let history = self.db.get_history(&channel, DEFAULT_HISTORY_LIMIT);
+        let mut history = self.db.get_history(&channel, DEFAULT_HISTORY_LIMIT);
+        Self::attach_reactions(&self.db, &mut history);
         if let Some(client) = clients.get(&id) {
             if let Err(e) = Self::send_to(
                 &client.tx,
@@ -288,7 +290,8 @@ impl Hub {
             return;
         }
         drop(clients);
-        let history = self.db.get_history(&channel, clamped_limit);
+        let mut history = self.db.get_history(&channel, clamped_limit);
+        Self::attach_reactions(&self.db, &mut history);
         let clients = self.clients.lock().await;
         if let Some(client) = clients.get(&id) {
             if let Err(e) = Self::send_to(
@@ -296,6 +299,21 @@ impl Hub {
                 &ServerMsg::History { channel, messages: history },
             ) {
                 eprintln!("[hub::chat] send history failed: {e:?}");
+            }
+        }
+    }
+
+    /// Attach reactions from the DB to a batch of history messages.
+    pub(crate) fn attach_reactions(db: &std::sync::Arc<crate::db::Db>, messages: &mut [HistoryMessage]) {
+        let msg_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+        if msg_ids.is_empty() { return; }
+        let reactions_map = db.get_reactions_batch(&msg_ids);
+        for msg in messages.iter_mut() {
+            if let Some(reactions) = reactions_map.get(&msg.id) {
+                let btree: BTreeMap<String, Vec<String>> = reactions.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                msg.reactions = Some(btree);
             }
         }
     }

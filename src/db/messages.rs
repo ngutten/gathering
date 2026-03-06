@@ -40,7 +40,7 @@ impl Db {
         let now = Utc::now().to_rfc3339();
 
         let mut stmt = match conn.prepare(
-                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted, reply_to_id, reply_to_author, reply_to_snippet, mentions FROM messages
+                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted, reply_to_id, reply_to_author, reply_to_snippet, mentions, pinned FROM messages
                  WHERE channel = ?1
                    AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY timestamp DESC LIMIT ?3",
@@ -63,13 +63,14 @@ impl Db {
                     row.get::<_, Option<String>>(9)?,
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, Option<String>>(11)?,
+                    row.get::<_, i32>(12).unwrap_or(0) != 0,
                 ))
             }) {
             Ok(rows) => rows.filter_map(|r| r.ok()).collect::<Vec<_>>(),
             Err(e) => { eprintln!("[db::messages] get_history query failed: {e}"); return Vec::new(); }
         };
 
-        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted, reply_id, reply_author, reply_snippet, mentions_str)| {
+        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted, reply_id, reply_author, reply_snippet, mentions_str, pinned)| {
             let attachments = att_str
                 .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
                 .map(|ids| {
@@ -108,6 +109,8 @@ impl Db {
                 encrypted,
                 reply_to,
                 mentions,
+                reactions: None,
+                pinned,
             }
         }).collect();
 
@@ -172,8 +175,112 @@ impl Db {
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).map_err(|_| "Message not found".to_string())?;
 
+        // Cascade delete reactions
+        if let Err(e) = conn.execute("DELETE FROM message_reactions WHERE message_id = ?1", params![id]) {
+            eprintln!("[db::messages] cascade delete reactions failed: {e}");
+        }
         conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
         Ok((channel, author))
+    }
+
+    pub fn pin_message(&self, id: &str, pinned: bool) -> Result<(String, String), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let (channel, author): (String, String) = conn.query_row(
+            "SELECT channel, author FROM messages WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| "Message not found".to_string())?;
+
+        conn.execute(
+            "UPDATE messages SET pinned = ?2 WHERE id = ?1",
+            params![id, pinned as i32],
+        ).map_err(|e| e.to_string())?;
+        Ok((channel, author))
+    }
+
+    pub fn get_pinned_messages(&self, channel: &str) -> Vec<HistoryMessage> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted, reply_to_id, reply_to_author, reply_to_snippet, mentions FROM messages
+             WHERE channel = ?1 AND pinned = 1
+             ORDER BY timestamp ASC",
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::messages] get_pinned_messages prepare failed: {e}"); return Vec::new(); }
+        };
+
+        let rows = match stmt.query_map(params![channel], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, i32>(7).unwrap_or(0) != 0,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+            ))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect::<Vec<_>>(),
+            Err(e) => { eprintln!("[db::messages] get_pinned_messages query failed: {e}"); return Vec::new(); }
+        };
+
+        rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted, reply_id, reply_author, reply_snippet, mentions_str)| {
+            let attachments = att_str
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|fid| self.get_file_inner(&conn, fid))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty());
+
+            let edited_at = edited_str.and_then(|s| {
+                DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
+            });
+
+            let reply_to = reply_id.map(|rid| ReplyRef {
+                message_id: rid,
+                author: reply_author.unwrap_or_default(),
+                snippet: reply_snippet.unwrap_or_default(),
+            });
+
+            let mentions = mentions_str
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .filter(|v| !v.is_empty());
+
+            HistoryMessage {
+                id,
+                author,
+                content,
+                timestamp: DateTime::parse_from_rfc3339(&ts_str)
+                    .unwrap_or_default()
+                    .with_timezone(&Utc),
+                expires_at: exp_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
+                }),
+                attachments,
+                edited_at,
+                encrypted,
+                reply_to,
+                mentions,
+                reactions: None,
+                pinned: true,
+            }
+        }).collect()
+    }
+
+    pub fn is_message_pinned(&self, id: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT pinned FROM messages WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i32>(0),
+        ).map(|v| v != 0).unwrap_or(false)
     }
 }

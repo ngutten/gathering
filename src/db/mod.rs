@@ -8,6 +8,7 @@ mod members;
 mod messages;
 mod preferences;
 mod quotas;
+mod reactions;
 mod roles;
 mod search;
 mod settings;
@@ -193,6 +194,7 @@ impl Db {
         ensure_column(&conn, "messages", "reply_to_author", "TEXT");
         ensure_column(&conn, "messages", "reply_to_snippet", "TEXT");
         ensure_column(&conn, "messages", "mentions", "TEXT");
+        ensure_column(&conn, "messages", "pinned", "INTEGER NOT NULL DEFAULT 0");
 
         // Table creation migrations
         conn.execute_batch(
@@ -225,6 +227,16 @@ impl Db {
                 key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 PRIMARY KEY (username, key)
+            );"
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS message_reactions (
+                message_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                emoji TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (message_id, username, emoji)
             );"
         )?;
 

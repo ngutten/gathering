@@ -653,3 +653,163 @@ fn delete_channel_cascades_messages_and_members() {
     assert!(db.get_channel_members("temp").is_empty());
     assert!(db.get_history("temp", 10).is_empty());
 }
+
+// ── Reactions ────────────────────────────────────────────────────────
+
+#[test]
+fn add_and_get_reactions() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    db.register("bob", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "hello", &ts, None, None, false, None, None);
+
+    db.add_reaction("msg-1", "alice", "👍").unwrap();
+    db.add_reaction("msg-1", "bob", "👍").unwrap();
+    db.add_reaction("msg-1", "alice", "❤️").unwrap();
+
+    let reactions = db.get_reactions_batch(&["msg-1".into()]);
+    let msg_reactions = reactions.get("msg-1").unwrap();
+    assert_eq!(msg_reactions.get("👍").unwrap().len(), 2);
+    assert_eq!(msg_reactions.get("❤️").unwrap().len(), 1);
+}
+
+#[test]
+fn remove_reaction() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "hello", &ts, None, None, false, None, None);
+
+    db.add_reaction("msg-1", "alice", "👍").unwrap();
+    db.remove_reaction("msg-1", "alice", "👍").unwrap();
+
+    let reactions = db.get_reactions_batch(&["msg-1".into()]);
+    assert!(reactions.get("msg-1").is_none() || reactions.get("msg-1").unwrap().is_empty());
+}
+
+#[test]
+fn add_reaction_idempotent() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "hello", &ts, None, None, false, None, None);
+
+    db.add_reaction("msg-1", "alice", "👍").unwrap();
+    db.add_reaction("msg-1", "alice", "👍").unwrap(); // should not duplicate
+    let reactions = db.get_reactions_batch(&["msg-1".into()]);
+    assert_eq!(reactions.get("msg-1").unwrap().get("👍").unwrap().len(), 1);
+}
+
+#[test]
+fn reactions_batch_multiple_messages() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "first", &ts, None, None, false, None, None);
+    db.store_message("msg-2", "general", "alice", "second", &ts, None, None, false, None, None);
+
+    db.add_reaction("msg-1", "alice", "👍").unwrap();
+    db.add_reaction("msg-2", "alice", "🎉").unwrap();
+
+    let reactions = db.get_reactions_batch(&["msg-1".into(), "msg-2".into()]);
+    assert!(reactions.get("msg-1").unwrap().contains_key("👍"));
+    assert!(reactions.get("msg-2").unwrap().contains_key("🎉"));
+}
+
+#[test]
+fn delete_message_cascades_reactions() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "hello", &ts, None, None, false, None, None);
+    db.add_reaction("msg-1", "alice", "👍").unwrap();
+
+    db.delete_message("msg-1").unwrap();
+    let reactions = db.get_reactions_batch(&["msg-1".into()]);
+    assert!(reactions.is_empty());
+}
+
+#[test]
+fn delete_reactions_for_message() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    db.register("bob", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "hello", &ts, None, None, false, None, None);
+    db.add_reaction("msg-1", "alice", "👍").unwrap();
+    db.add_reaction("msg-1", "bob", "❤️").unwrap();
+
+    db.delete_reactions_for_message("msg-1");
+    let reactions = db.get_reactions_batch(&["msg-1".into()]);
+    assert!(reactions.is_empty());
+}
+
+#[test]
+fn reactions_empty_batch() {
+    let db = fresh_db();
+    let reactions = db.get_reactions_batch(&[]);
+    assert!(reactions.is_empty());
+}
+
+// ── Message Pinning ──────────────────────────────────────────────────
+
+#[test]
+fn pin_and_unpin_message() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "important", &ts, None, None, false, None, None);
+
+    assert!(!db.is_message_pinned("msg-1"));
+
+    db.pin_message("msg-1", true).unwrap();
+    assert!(db.is_message_pinned("msg-1"));
+
+    db.pin_message("msg-1", false).unwrap();
+    assert!(!db.is_message_pinned("msg-1"));
+}
+
+#[test]
+fn get_pinned_messages() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "pinned msg", &ts, None, None, false, None, None);
+    db.store_message("msg-2", "general", "alice", "not pinned", &ts, None, None, false, None, None);
+    db.store_message("msg-3", "general", "alice", "also pinned", &ts, None, None, false, None, None);
+
+    db.pin_message("msg-1", true).unwrap();
+    db.pin_message("msg-3", true).unwrap();
+
+    let pinned = db.get_pinned_messages("general");
+    assert_eq!(pinned.len(), 2);
+    assert!(pinned.iter().all(|m| m.pinned));
+    let ids: Vec<&str> = pinned.iter().map(|m| m.id.as_str()).collect();
+    assert!(ids.contains(&"msg-1"));
+    assert!(ids.contains(&"msg-3"));
+    assert!(!ids.contains(&"msg-2"));
+}
+
+#[test]
+fn pinned_field_in_history() {
+    let db = fresh_db();
+    db.register("alice", "password123").unwrap();
+    let ts = chrono::Utc::now();
+    db.store_message("msg-1", "general", "alice", "pinned", &ts, None, None, false, None, None);
+    db.store_message("msg-2", "general", "alice", "not pinned", &ts, None, None, false, None, None);
+    db.pin_message("msg-1", true).unwrap();
+
+    let history = db.get_history("general", 10);
+    let msg1 = history.iter().find(|m| m.id == "msg-1").unwrap();
+    let msg2 = history.iter().find(|m| m.id == "msg-2").unwrap();
+    assert!(msg1.pinned);
+    assert!(!msg2.pinned);
+}
+
+#[test]
+fn pin_nonexistent_message_fails() {
+    let db = fresh_db();
+    let err = db.pin_message("nonexistent", true).unwrap_err();
+    assert!(err.contains("not found"), "got: {err}");
+}

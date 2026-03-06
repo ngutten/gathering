@@ -5,6 +5,7 @@ import { send } from './transport.js';
 import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime, renderAttachmentsHtml, decryptAndRenderAttachments, renderTtlBadge, renderEncryptedBadge } from './render.js';
 import { tryDecrypt } from './crypto.js';
 import { apiUrl, fileUrl } from './config.js';
+import { openReactionPicker, closeReactionPicker } from './emoji.js';
 
 const TYPING_INDICATOR_TIMEOUT_MS = 3000;
 const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
@@ -47,15 +48,15 @@ export function appendMessage(msg) {
   // Action buttons
   let actionsHtml = '';
   const isOwn = msg.author === state.currentUser;
-  if (isOwn || state.isAdmin) {
-    actionsHtml = '<div class="msg-actions">';
-    actionsHtml += `<button onclick="startReply('${msg.id}')">reply</button>`;
-    if (isOwn) actionsHtml += `<button onclick="startEditMessage('${msg.id}')">edit</button>`;
-    actionsHtml += `<button class="del-btn" onclick="deleteMessage('${msg.id}')">del</button>`;
-    actionsHtml += '</div>';
-  } else {
-    actionsHtml = '<div class="msg-actions"><button onclick="startReply(\''+msg.id+'\')">reply</button></div>';
-  }
+  const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[msg.channel || state.currentChannel] === state.currentUser);
+  const isEncrypted = state.encryptedChannels.has(msg.channel || state.currentChannel);
+  actionsHtml = '<div class="msg-actions">';
+  if (!isEncrypted) actionsHtml += `<button class="react-btn" data-msg-id="${msg.id}">+&#x1F600;</button>`;
+  actionsHtml += `<button onclick="startReply('${msg.id}')">reply</button>`;
+  if (canPin) actionsHtml += `<button onclick="togglePinMessage('${msg.id}')">${msg.pinned ? 'unpin' : 'pin'}</button>`;
+  if (isOwn) actionsHtml += `<button onclick="startEditMessage('${msg.id}')">edit</button>`;
+  if (isOwn || state.isAdmin) actionsHtml += `<button class="del-btn" onclick="deleteMessage('${msg.id}')">del</button>`;
+  actionsHtml += '</div>';
 
   // Reply reference bar
   let replyHtml = '';
@@ -71,16 +72,39 @@ export function appendMessage(msg) {
     div.classList.add('msg-continuation');
   }
 
+  const pinnedBadge = msg.pinned ? '<span class="pinned-badge" title="Pinned">&#x1F4CC;</span>' : '';
+  const reactionsHtml = renderReactionsBar(msg.id, msg.reactions);
+
   div.innerHTML = `${actionsHtml}${replyHtml}
     <div class="meta">
-      <span class="author">${escapeHtml(msg.author)}</span>
+      ${pinnedBadge}<span class="author">${escapeHtml(msg.author)}</span>
       <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}
     </div>
-    <div class="body">${content}</div>${attachHtml}`;
+    <div class="body">${content}</div>${attachHtml}${reactionsHtml}`;
   // Insert date header if this message is on a different day than the previous
   maybeInsertDateHeader(el, msg);
 
   el.appendChild(div);
+
+  // Wire up the reaction picker button
+  const reactBtn = div.querySelector('.react-btn');
+  if (reactBtn) {
+    reactBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openReactionPicker(reactBtn, (emoji) => {
+        send('AddReaction', { message_id: msg.id, emoji });
+      });
+    });
+  }
+
+  // Wire up existing reaction buttons for toggle behavior
+  div.querySelectorAll('.reactions-bar .reaction').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.classList.contains('mine') ? 'RemoveReaction' : 'AddReaction';
+      send(action, { message_id: btn.getAttribute('data-msg-id'), emoji: btn.getAttribute('data-emoji') });
+    });
+  });
+
   el.scrollTop = el.scrollHeight;
 
   // Decrypt and render any encrypted attachments now that they're in the DOM
@@ -502,6 +526,9 @@ export function switchChannel(name) {
   renderChannels();
   renderDMList();
   updateRequestKeyButton();
+  // Hide widgets on encrypted channels (data leak risk)
+  const widgetBtn = document.getElementById('widget-toolbar-btn');
+  if (widgetBtn) widgetBtn.style.display = state.encryptedChannels.has(name) ? 'none' : '';
   // Import switchView dynamically to avoid circular deps
   import('./topics.js').then(m => m.switchView('chat'));
   // Always send Join — server is idempotent (skips broadcast if already joined)
@@ -529,6 +556,138 @@ export function updateRequestKeyButton() {
 // Client-side rate limit: track last request time per channel
 const _keyRequestTimes = {};
 const KEY_REQUEST_COOLDOWN_MS = 30000; // 30 seconds
+
+// ── Reactions ──
+
+function renderReactionsBar(msgId, reactions) {
+  if (!reactions || Object.keys(reactions).length === 0) return '';
+  let html = '<div class="reactions-bar">';
+  for (const [emoji, users] of Object.entries(reactions)) {
+    const isMine = users.includes(state.currentUser);
+    const cls = isMine ? 'reaction mine' : 'reaction';
+    const title = users.join(', ');
+    html += `<button class="${cls}" title="${escapeHtml(title)}" data-msg-id="${escapeHtml(msgId)}" data-emoji="${escapeHtml(emoji)}">${escapeHtml(emoji)} ${users.length}</button>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+export function updateReactionInDOM(msg) {
+  const msgEl = document.querySelector(`.msg[data-msg-id="${msg.message_id}"]`);
+  if (!msgEl) return;
+
+  // Update in-memory reactions on the element
+  let bar = msgEl.querySelector('.reactions-bar');
+  if (msg.added) {
+    // Add reaction
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'reactions-bar';
+      msgEl.appendChild(bar);
+    }
+    let btn = bar.querySelector(`button[data-emoji="${CSS.escape(msg.emoji)}"]`);
+    if (btn) {
+      const title = btn.getAttribute('title');
+      const users = title ? title.split(', ') : [];
+      if (!users.includes(msg.username)) users.push(msg.username);
+      btn.setAttribute('title', users.join(', '));
+      btn.textContent = `${msg.emoji} ${users.length}`;
+      if (msg.username === state.currentUser) btn.classList.add('mine');
+    } else {
+      btn = document.createElement('button');
+      btn.className = msg.username === state.currentUser ? 'reaction mine' : 'reaction';
+      btn.setAttribute('data-msg-id', msg.message_id);
+      btn.setAttribute('data-emoji', msg.emoji);
+      btn.setAttribute('title', msg.username);
+      btn.textContent = `${msg.emoji} 1`;
+      btn.addEventListener('click', () => {
+        const action = btn.classList.contains('mine') ? 'RemoveReaction' : 'AddReaction';
+        send(action, { message_id: msg.message_id, emoji: msg.emoji });
+      });
+      bar.appendChild(btn);
+    }
+  } else {
+    // Remove reaction
+    if (!bar) return;
+    const btn = bar.querySelector(`button[data-emoji="${CSS.escape(msg.emoji)}"]`);
+    if (!btn) return;
+    const title = btn.getAttribute('title');
+    const users = title ? title.split(', ').filter(u => u !== msg.username) : [];
+    if (users.length === 0) {
+      btn.remove();
+      if (bar.children.length === 0) bar.remove();
+    } else {
+      btn.setAttribute('title', users.join(', '));
+      btn.textContent = `${msg.emoji} ${users.length}`;
+      if (msg.username === state.currentUser) btn.classList.remove('mine');
+    }
+  }
+}
+
+export function togglePinMessage(msgId) {
+  const msgEl = document.querySelector(`.msg[data-msg-id="${msgId}"]`);
+  if (!msgEl) return;
+  const isPinned = !!msgEl.querySelector('.pinned-badge');
+  send('PinMessage', { message_id: msgId, pinned: !isPinned });
+}
+
+export function updatePinInDOM(msg) {
+  const msgEl = document.querySelector(`.msg[data-msg-id="${msg.message_id}"]`);
+  if (!msgEl) return;
+  const meta = msgEl.querySelector('.meta');
+  if (!meta) return;
+  const existing = meta.querySelector('.pinned-badge');
+  if (msg.pinned && !existing) {
+    const badge = document.createElement('span');
+    badge.className = 'pinned-badge';
+    badge.title = 'Pinned';
+    badge.innerHTML = '&#x1F4CC;';
+    meta.insertBefore(badge, meta.firstChild);
+  } else if (!msg.pinned && existing) {
+    existing.remove();
+  }
+  // Update the pin/unpin button text
+  const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[msg.channel] === state.currentUser);
+  if (canPin) {
+    const actions = msgEl.querySelector('.msg-actions');
+    if (actions) {
+      const pinBtn = Array.from(actions.querySelectorAll('button')).find(b => b.textContent === 'pin' || b.textContent === 'unpin');
+      if (pinBtn) pinBtn.textContent = msg.pinned ? 'unpin' : 'pin';
+    }
+  }
+}
+
+export function openPinnedPanel() {
+  send('GetPinnedMessages', { channel: state.currentChannel });
+}
+
+export function closePinnedPanel() {
+  const overlay = document.getElementById('pinned-messages-overlay');
+  if (overlay) overlay.classList.remove('active');
+}
+
+export function renderPinnedPanel(msg) {
+  const overlay = document.getElementById('pinned-messages-overlay');
+  if (!overlay) return;
+  const content = document.getElementById('pinned-messages-content');
+  if (!content) return;
+
+  if (msg.messages.length === 0) {
+    content.innerHTML = '<div style="color:var(--text2);font-size:0.8rem;">No pinned messages in this channel.</div>';
+  } else {
+    content.innerHTML = msg.messages.map(m => {
+      let displayContent = m.content;
+      if (m.encrypted) displayContent = tryDecrypt(m.content, msg.channel);
+      const rendered = renderRichContent(displayContent);
+      const time = new Date(m.timestamp).toLocaleString();
+      return `<div class="pinned-msg" onclick="scrollToMessage('${escapeHtml(m.id)}'); closePinnedPanel();">
+        <div class="meta"><span class="author">${escapeHtml(m.author)}</span> <span class="time">${time}</span></div>
+        <div class="body">${rendered}</div>
+      </div>`;
+    }).join('');
+  }
+  overlay.classList.add('active');
+}
 
 export function requestChannelKey() {
   const ch = state.currentChannel;

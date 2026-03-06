@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use uuid::Uuid;
 
 // ── Reply-to reference ──────────────────────────────────────────────
@@ -75,6 +75,14 @@ pub enum ClientMsg {
     },
     /// Pin/unpin a topic
     PinTopic { topic_id: String, pinned: bool },
+
+    // ── Reactions ──
+    AddReaction { message_id: String, emoji: String },
+    RemoveReaction { message_id: String, emoji: String },
+
+    // ── Message Pinning ──
+    PinMessage { message_id: String, pinned: bool },
+    GetPinnedMessages { channel: String },
 
     // ── Edit/Delete ──
     EditMessage { message_id: String, content: String },
@@ -228,6 +236,13 @@ pub enum ServerMsg {
     /// Topic pin status changed (broadcast)
     TopicPinned { topic_id: String, channel: String, pinned: bool },
 
+    // ── Reactions ──
+    ReactionUpdated { message_id: String, channel: String, emoji: String, username: String, added: bool },
+
+    // ── Message Pinning ──
+    MessagePinned { message_id: String, channel: String, pinned: bool, pinned_by: String },
+    PinnedMessages { channel: String, messages: Vec<HistoryMessage> },
+
     // ── Edit/Delete broadcasts ──
     MessageEdited { id: String, channel: String, content: String, edited_at: String },
     MessageDeleted { id: String, channel: String },
@@ -309,7 +324,13 @@ pub struct HistoryMessage {
     pub reply_to: Option<ReplyRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reactions: Option<BTreeMap<String, Vec<String>>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
 }
+
+fn is_false(v: &bool) -> bool { !v }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInfo {
@@ -321,6 +342,8 @@ pub struct ChannelInfo {
     pub channel_type: String,
     #[serde(default)]
     pub restricted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -245,3 +245,119 @@ function insertEmoji(emoji) {
   input.focus();
   pickerEl.style.display = 'none';
 }
+
+// ── Reaction Emoji Picker ────────────────────────────────────────────
+
+let reactionPickerEl = null;
+let reactionCallback = null;
+
+export function openReactionPicker(anchorEl, callback) {
+  if (reactionPickerEl && reactionPickerEl.style.display !== 'none') {
+    reactionPickerEl.style.display = 'none';
+    return;
+  }
+  reactionCallback = callback;
+  if (!reactionPickerEl) {
+    reactionPickerEl = createReactionPicker();
+    document.body.appendChild(reactionPickerEl);
+  }
+  const rect = anchorEl.getBoundingClientRect();
+  reactionPickerEl.style.top = (rect.bottom + 4) + 'px';
+  reactionPickerEl.style.left = Math.max(4, rect.left - 100) + 'px';
+  reactionPickerEl.style.display = 'flex';
+  const searchInput = reactionPickerEl.querySelector('.emoji-search');
+  if (searchInput) { searchInput.value = ''; searchInput.focus(); }
+  showCategory(Object.keys(emojiCategories)[0], reactionPickerEl);
+}
+
+export function closeReactionPicker() {
+  if (reactionPickerEl) reactionPickerEl.style.display = 'none';
+}
+
+function createReactionPicker() {
+  const el = document.createElement('div');
+  el.className = 'emoji-picker reaction-picker';
+  el.onclick = (e) => e.stopPropagation();
+
+  const search = document.createElement('input');
+  search.type = 'text';
+  search.className = 'emoji-search';
+  search.placeholder = 'Search emoji...';
+  search.oninput = () => filterReactionEmoji(search.value, el);
+  el.appendChild(search);
+
+  const tabs = document.createElement('div');
+  tabs.className = 'emoji-tabs';
+  const catNames = Object.keys(emojiCategories);
+  const tabIcons = ['😄', '👋', '🐶', '🍕', '⚽', '🚗', '💡', '✅'];
+  catNames.forEach((cat, i) => {
+    const tab = document.createElement('button');
+    tab.textContent = tabIcons[i] || cat[0];
+    tab.title = cat;
+    tab.onclick = () => {
+      el.querySelectorAll('.emoji-tabs button').forEach(b => b.classList.remove('active'));
+      tab.classList.add('active');
+      showReactionCategory(cat, el);
+      search.value = '';
+    };
+    if (i === 0) tab.classList.add('active');
+    tabs.appendChild(tab);
+  });
+  el.appendChild(tabs);
+
+  const grid = document.createElement('div');
+  grid.className = 'emoji-grid';
+  el.appendChild(grid);
+
+  showReactionCategory(catNames[0], el);
+
+  document.addEventListener('click', (e) => {
+    if (reactionPickerEl && reactionPickerEl.style.display !== 'none' &&
+        !reactionPickerEl.contains(e.target) && !e.target.classList.contains('react-btn')) {
+      reactionPickerEl.style.display = 'none';
+    }
+  });
+
+  return el;
+}
+
+function showReactionCategory(cat, pickerRoot) {
+  const grid = pickerRoot.querySelector('.emoji-grid');
+  grid.innerHTML = '';
+  const emojis = emojiCategories[cat];
+  for (const [code, emoji] of Object.entries(emojis)) {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-item';
+    btn.textContent = emoji;
+    btn.title = `:${code}:`;
+    btn.onclick = () => {
+      if (reactionCallback) reactionCallback(emoji);
+      reactionPickerEl.style.display = 'none';
+    };
+    grid.appendChild(btn);
+  }
+}
+
+function filterReactionEmoji(query, pickerRoot) {
+  const grid = pickerRoot.querySelector('.emoji-grid');
+  grid.innerHTML = '';
+  if (!query) {
+    const activeTab = pickerRoot.querySelector('.emoji-tabs button.active');
+    if (activeTab) showReactionCategory(activeTab.title, pickerRoot);
+    return;
+  }
+  const q = query.toLowerCase();
+  for (const [code, emoji] of Object.entries(emojiMap)) {
+    if (code.toLowerCase().includes(q)) {
+      const btn = document.createElement('button');
+      btn.className = 'emoji-item';
+      btn.textContent = emoji;
+      btn.title = `:${code}:`;
+      btn.onclick = () => {
+        if (reactionCallback) reactionCallback(emoji);
+        reactionPickerEl.style.display = 'none';
+      };
+      grid.appendChild(btn);
+    }
+  }
+}

@@ -82,6 +82,9 @@ const state = {
   // Search state
   searchOpen: false,
   searchResults: [],
+
+  // Channel metadata
+  channelCreators: {},
 };
 
 // Load last-read timestamps from localStorage

@@ -1,14 +1,14 @@
 # TODO
 
 ## Reliability & Operations
-- [x] Automated tests (71 tests: 53 DB-layer, 18 hub integration — see tests/)
+- [x] Automated tests (90 tests: 64 DB-layer, 26 hub integration — see tests/)
 - [ ] Database backup endpoint or scheduled job (SQLite `.backup`)
 - [ ] Graceful shutdown (drain WebSocket connections and DB writes on SIGTERM)
 
 ## User-Facing Features
-- [ ] Message reactions (emoji reactions on chat messages)
+- [x] Message reactions (emoji reactions on chat messages)
 - [ ] User profiles (avatars, status messages, about text)
-- [ ] Message pinning in channels (topics have pinning, but chat messages don't)
+- [x] Message pinning in channels (pin/unpin, pinned messages panel)
 
 ## Infrastructure
 - [ ] WebSocket reconnect resilience (missed-message catch-up via last-seen message ID)
