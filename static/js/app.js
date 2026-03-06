@@ -20,6 +20,7 @@ import { send } from './transport.js';
 import './widgets/dice-roller.js';
 import './widgets/initiative.js';
 import './widgets/radio.js';
+import './widgets/whiteboard.js';
 // Expose helpers for widgets
 window._widgetTransport = { send };
 window._getActiveWidgets = getActiveWidgets;

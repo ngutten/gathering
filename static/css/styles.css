@@ -466,7 +466,7 @@
   /* ── Widget system ─── */
   .widget-panel { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem;
                   border-bottom: 1px solid var(--border); background: var(--bg2); }
-  .widget-container { flex: 1; min-width: 250px; max-width: 550px;
+  .widget-container { flex: 1; min-width: 250px; max-width: 800px;
                       background: var(--bg); border: 1px solid var(--border);
                       border-radius: 6px; overflow: hidden; }
   .widget-header { display: flex; justify-content: space-between; align-items: center;
@@ -670,3 +670,38 @@
   .radio-topic-item:hover { background: var(--bg3); }
   .radio-topic-back { font-size: 0.75rem; color: var(--accent); cursor: pointer; padding: 0.2rem 0.3rem; }
   .radio-topic-back:hover { text-decoration: underline; }
+
+  /* ── Whiteboard widget ─── */
+  .whiteboard-widget { display: flex; flex-direction: column; height: 350px; }
+  .wb-toolbar { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.3rem 0.5rem;
+                border-bottom: 1px solid var(--border); align-items: center; }
+  .wb-tool-group, .wb-color-group, .wb-width-group { display: flex; gap: 0.15rem; align-items: center; }
+  .wb-tool-group { border-right: 1px solid var(--border); padding-right: 0.3rem; margin-right: 0.1rem; }
+  .wb-color-group { border-right: 1px solid var(--border); padding-right: 0.3rem; margin-right: 0.1rem; }
+  .wb-tool-btn { padding: 0.15rem 0.35rem; background: var(--bg3); border: 1px solid var(--border);
+                 border-radius: 3px; color: var(--text); font-size: 0.8rem; cursor: pointer;
+                 line-height: 1; min-width: 1.6em; text-align: center; }
+  .wb-tool-btn:hover { border-color: var(--accent); }
+  .wb-tool-btn.active { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+  .wb-color-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px;
+                     border: 1.5px solid var(--border); cursor: pointer; vertical-align: middle; }
+  .wb-color-swatch:hover { border-color: var(--accent); }
+  .wb-color-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 1.5px var(--accent); }
+  .wb-color-custom { width: 16px; height: 16px; padding: 0; border: 1px solid var(--border);
+                     border-radius: 2px; cursor: pointer; background: none; vertical-align: middle; }
+  .wb-width-btn { padding: 0.1rem 0.3rem; background: var(--bg3); border: 1px solid var(--border);
+                  border-radius: 3px; color: var(--text); font-size: 0.65rem; cursor: pointer; }
+  .wb-width-btn:hover { border-color: var(--accent); }
+  .wb-width-btn.active { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+  .wb-fill-toggle { font-size: 0.7rem; color: var(--text2); cursor: pointer; display: flex;
+                    align-items: center; gap: 0.2rem; margin-left: 0.2rem; }
+  .wb-fill-toggle input { margin: 0; }
+  .wb-action-btn { padding: 0.15rem 0.4rem; background: var(--bg3); border: 1px solid var(--border);
+                   border-radius: 3px; color: var(--text2); font-size: 0.65rem; cursor: pointer;
+                   font-family: inherit; }
+  .wb-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .wb-canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #1a1a2e; }
+  .wb-canvas { display: block; cursor: crosshair; }
+  .wb-text-input { position: absolute; background: transparent; border: 1px dashed var(--accent);
+                   color: #fff; font-family: sans-serif; font-size: 16px; padding: 2px 4px;
+                   min-width: 60px; min-height: 1.4em; resize: both; outline: none; z-index: 10; }

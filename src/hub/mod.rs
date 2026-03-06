@@ -451,6 +451,14 @@ impl Hub {
             ClientMsg::WidgetMessage { channel, widget_id, action, data } => {
                 self.handle_widget_message(id, channel, widget_id, action, data).await;
             }
+
+            ClientMsg::SaveWidgetState { channel, widget_id, state } => {
+                self.handle_save_widget_state(id, channel, widget_id, state).await;
+            }
+
+            ClientMsg::LoadWidgetState { channel, widget_id } => {
+                self.handle_load_widget_state(id, channel, widget_id).await;
+            }
         }
     }
 

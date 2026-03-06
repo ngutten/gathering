@@ -11,7 +11,7 @@ import { switchView, renderTopicList, renderThread, appendTopicReply } from './t
 import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCreated, onUserRolesResponse } from './admin.js';
 import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
 import { handleSearchResults, handleSearchHistory } from './search.js';
-import { routeWidgetBroadcast, clearUserPresence } from './widgets/widget-api.js';
+import { routeWidgetBroadcast, routeWidgetServerResponse, clearUserPresence } from './widgets/widget-api.js';
 import { showNotification, renderNotificationSettings } from './notifications.js';
 
 export function handleServerMsg(msg) {
@@ -468,6 +468,11 @@ export function handleServerMsg(msg) {
     // ── Widgets ──
     case 'WidgetBroadcast':
       routeWidgetBroadcast(msg);
+      break;
+
+    case 'WidgetStateLoaded':
+    case 'WidgetStateSaved':
+      routeWidgetServerResponse(msg);
       break;
   }
 }

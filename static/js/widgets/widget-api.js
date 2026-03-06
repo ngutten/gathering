@@ -43,6 +43,26 @@ export class WidgetBase {
 
   /** Override: cleanup */
   deactivate() {}
+
+  /** Override: handle server response (WidgetStateLoaded, WidgetStateSaved) */
+  onServerResponse(type, data) {}
+
+  /** Save widget state to server */
+  saveToServer(stateData) {
+    transportSend('SaveWidgetState', {
+      channel: this.channel,
+      widget_id: this.id,
+      state: stateData,
+    });
+  }
+
+  /** Load widget state from server */
+  loadFromServer() {
+    transportSend('LoadWidgetState', {
+      channel: this.channel,
+      widget_id: this.id,
+    });
+  }
 }
 
 // ── Registry ──
@@ -176,6 +196,17 @@ export function clearUserPresence(channel, username) {
   }
   updateWidgetToolbar();
   if (pickerVisible) renderWidgetPicker();
+}
+
+/** Route a server response (WidgetStateLoaded/WidgetStateSaved) to the right widget */
+export function routeWidgetServerResponse(msg) {
+  const channel = msg.channel;
+  const widgetId = msg.widget_id;
+  const channelWidgets = activeWidgets[channel];
+  if (!channelWidgets) return;
+  const instance = channelWidgets[widgetId];
+  if (!instance) return;
+  instance.onServerResponse(msg.type, msg);
 }
 
 /** Route an incoming WidgetBroadcast to the right widget instance */

@@ -13,6 +13,7 @@ mod search;
 mod settings;
 mod topics;
 mod voice;
+mod widget_state;
 
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -224,6 +225,17 @@ impl Db {
                 key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 PRIMARY KEY (username, key)
+            );"
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS widget_state (
+                channel TEXT NOT NULL,
+                widget_id TEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_by TEXT NOT NULL,
+                PRIMARY KEY (channel, widget_id)
             );"
         )?;
 

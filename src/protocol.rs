@@ -135,6 +135,15 @@ pub enum ClientMsg {
         action: String,
         data: serde_json::Value,
     },
+    SaveWidgetState {
+        channel: String,
+        widget_id: String,
+        state: serde_json::Value,
+    },
+    LoadWidgetState {
+        channel: String,
+        widget_id: String,
+    },
 }
 
 // ── Server → Client messages ────────────────────────────────────────
@@ -260,6 +269,15 @@ pub enum ServerMsg {
         from_user: String,
         action: String,
         data: serde_json::Value,
+    },
+    WidgetStateLoaded {
+        channel: String,
+        widget_id: String,
+        state: Option<serde_json::Value>,
+    },
+    WidgetStateSaved {
+        channel: String,
+        widget_id: String,
     },
 }
 
