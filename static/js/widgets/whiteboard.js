@@ -144,7 +144,9 @@ function exportPDF(elements, canvasW, canvasH) {
   minX -= margin; minY -= margin; maxX += margin; maxY += margin;
   const pw = maxX - minX, ph = maxY - minY;
 
-  let stream = '';
+  // Draw background matching the canvas color (#1a1a2e)
+  const [bgR, bgG, bgB] = hexToRgb01('#1a1a2e');
+  let stream = `${bgR} ${bgG} ${bgB} rg\n0 0 ${pw} ${ph} re f\n`;
   const sorted = els.sort((a, b) => a.zIndex - b.zIndex);
 
   for (const el of sorted) {
