@@ -672,7 +672,7 @@
   .radio-topic-back:hover { text-decoration: underline; }
 
   /* ── Whiteboard widget ─── */
-  .whiteboard-widget { display: flex; flex-direction: column; height: 350px; }
+  .whiteboard-widget { display: flex; flex-direction: column; height: 700px; }
   .wb-toolbar { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.3rem 0.5rem;
                 border-bottom: 1px solid var(--border); align-items: center; }
   .wb-tool-group, .wb-color-group, .wb-width-group { display: flex; gap: 0.15rem; align-items: center; }

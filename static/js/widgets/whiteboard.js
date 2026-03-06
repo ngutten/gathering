@@ -64,7 +64,7 @@ class PdfWriter {
 
   _addObj(content) {
     this.objects.push(content);
-    return this.objects.length; // 1-indexed
+    return this.objects.length + 2; // +2 to account for catalog and pages prepended in toBlob
   }
 
   addPage(w, h, streamContent) {
