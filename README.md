@@ -72,4 +72,4 @@ Cross-platform binaries are built automatically via GitHub Actions on push to `m
 
 ## License
 
-TBD
+CC0
