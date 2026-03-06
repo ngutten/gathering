@@ -12,6 +12,7 @@ import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCrea
 import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
 import { handleSearchResults, handleSearchHistory } from './search.js';
 import { routeWidgetBroadcast, clearUserPresence } from './widgets/widget-api.js';
+import { showNotification, renderNotificationSettings } from './notifications.js';
 
 export function handleServerMsg(msg) {
   switch (msg.type) {
@@ -25,6 +26,7 @@ export function handleServerMsg(msg) {
         document.getElementById('display-user').textContent = state.currentUser;
         document.getElementById('admin-gear-btn').style.display = state.isAdmin ? '' : 'none';
         initE2E().then(() => updateKeyUI());
+        send('GetPreferences', {});
         // Trigger widget presence check for the default channel
         emit('channel-switched', state.currentChannel);
       } else {
@@ -41,6 +43,13 @@ export function handleServerMsg(msg) {
         state.unreadCounts[msg.channel] = (state.unreadCounts[msg.channel] || 0) + 1;
         renderChannels();
         renderDMList();
+      }
+      // Mention notifications
+      if (msg.mentions && msg.mentions.includes(state.currentUser) && msg.author !== state.currentUser) {
+        if (msg.channel !== state.currentChannel || document.hidden) {
+          const mentionType = msg.content.match(/@(channel|server)\b/) ? (msg.content.match(/@channel\b/) ? 'channel' : 'server') : 'user';
+          showNotification(msg, mentionType);
+        }
       }
       break;
 
@@ -448,6 +457,12 @@ export function handleServerMsg(msg) {
 
     case 'UserRoles':
       onUserRolesResponse(msg.username, msg.roles);
+      break;
+
+    // ── Preferences ──
+    case 'Preferences':
+      state.notificationPrefs = msg.prefs || {};
+      renderNotificationSettings();
       break;
 
     // ── Widgets ──

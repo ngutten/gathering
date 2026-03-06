@@ -6,6 +6,7 @@ mod files;
 mod invites;
 mod members;
 mod messages;
+mod preferences;
 mod quotas;
 mod roles;
 mod search;
@@ -187,6 +188,10 @@ impl Db {
         ensure_column(&conn, "channels", "created_by", "TEXT");
         ensure_column(&conn, "sessions", "expires_at", "TEXT");
         ensure_column(&conn, "files", "encrypted", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "messages", "reply_to_id", "TEXT");
+        ensure_column(&conn, "messages", "reply_to_author", "TEXT");
+        ensure_column(&conn, "messages", "reply_to_snippet", "TEXT");
+        ensure_column(&conn, "messages", "mentions", "TEXT");
 
         // Table creation migrations
         conn.execute_batch(
@@ -210,6 +215,15 @@ impl Db {
                 channel TEXT NOT NULL,
                 username TEXT NOT NULL,
                 PRIMARY KEY (channel, username)
+            );"
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS user_preferences (
+                username TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (username, key)
             );"
         )?;
 

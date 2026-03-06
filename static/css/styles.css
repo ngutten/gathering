@@ -544,6 +544,60 @@
   .initiative-name-input:focus, .initiative-roll-input:focus { outline: none; border-color: var(--accent); }
   .initiative-actions { display: flex; gap: 0.3rem; }
 
+  /* ── Message consolidation ─── */
+  .msg-continuation { padding-top: 0; }
+  .msg-continuation .meta { display: none; }
+
+  /* ── Reply reference ─── */
+  .reply-ref { border-left: 3px solid var(--accent2); padding: 0.15rem 0.5rem; margin-bottom: 0.15rem;
+               font-size: 0.75rem; color: var(--text2); cursor: pointer; background: rgba(88,166,255,0.05);
+               border-radius: 0 3px 3px 0; max-width: 500px; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
+  .reply-ref:hover { background: rgba(88,166,255,0.12); }
+  .reply-ref .reply-author { color: var(--accent); font-weight: 600; }
+
+  /* ── Reply banner ─── */
+  .reply-banner { display: none; padding: 0.3rem 0.7rem; background: var(--bg3);
+                  border-bottom: 1px solid var(--accent2); font-size: 0.75rem;
+                  color: var(--text2); align-items: center; justify-content: space-between; }
+  .reply-banner.active { display: flex; }
+  .reply-banner button { background: none; border: none; color: var(--accent); cursor: pointer;
+                         font-family: inherit; font-size: 0.75rem; }
+  .reply-banner-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+  /* ── @Mentions ─── */
+  .mention { color: var(--accent); background: rgba(88,166,255,0.1); padding: 0 0.2rem;
+             border-radius: 3px; cursor: default; }
+  .mention-self { background: rgba(88,166,255,0.25); font-weight: 600; }
+  .mention-channel, .mention-server { color: var(--orange); background: rgba(210,153,34,0.1); }
+
+  /* ── Notification toast ─── */
+  #notification-container { position: fixed; top: 1rem; right: 1rem; z-index: 300;
+                            display: flex; flex-direction: column; gap: 0.5rem;
+                            pointer-events: none; }
+  .notification-toast { pointer-events: auto; background: var(--bg2); border: 1px solid var(--accent2);
+                        border-radius: 6px; padding: 0.6rem 0.8rem; min-width: 250px; max-width: 350px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.4); cursor: pointer;
+                        animation: toast-slide-in 0.3s ease; }
+  .notification-toast-exit { animation: toast-slide-out 0.3s ease; opacity: 0; }
+  .notification-toast-title { font-size: 0.8rem; font-weight: 600; color: var(--accent);
+                              margin-bottom: 0.2rem; }
+  .notification-toast-body { font-size: 0.75rem; color: var(--text2); overflow: hidden;
+                             text-overflow: ellipsis; white-space: nowrap; }
+  @keyframes toast-slide-in { from { transform: translateX(100%); opacity: 0; }
+                               to { transform: translateX(0); opacity: 1; } }
+  @keyframes toast-slide-out { from { transform: translateX(0); opacity: 1; }
+                                to { transform: translateX(100%); opacity: 0; } }
+
+  /* ── Notification settings ─── */
+  .notification-settings { padding: 0.3rem 1rem; }
+  .notif-setting { display: flex; align-items: center; justify-content: space-between;
+                   font-size: 0.7rem; color: var(--text2); margin-bottom: 0.2rem; }
+  .notif-setting label { flex-shrink: 0; }
+  .notif-setting select { background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+                          color: var(--text); font-family: inherit; font-size: 0.65rem;
+                          padding: 0.1rem 0.2rem; }
+
   /* ── Radio widget ─── */
   .radio-widget { padding: 0.4rem 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
   .radio-dj-badge { font-size: 0.65rem; color: var(--text2); margin-left: auto; margin-right: 0.4rem; }

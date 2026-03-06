@@ -86,6 +86,7 @@
       </div>
       <div class="sidebar-section" style="border-top:1px solid var(--border);padding-top:0.3rem;">
         <button class="files-btn" onclick="openFileManager()">Files</button>
+        <div id="notification-settings" class="notification-settings"></div>
       </div>
       <div class="sidebar-bottom">
         <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code><span id="no-key-label" style="font-size:0.65rem;color:var(--red);">No key set</span></div>
@@ -143,6 +144,10 @@
       <!-- Chat view -->
       <div id="chat-view">
         <div class="messages" id="messages"></div>
+        <div class="reply-banner" id="reply-banner">
+          <span class="reply-banner-text">Replying to...</span>
+          <button onclick="cancelReply()">Cancel</button>
+        </div>
         <div class="edit-banner" id="edit-banner">
           <span>Editing message - <em>Escape</em> to cancel</span>
           <button onclick="cancelEdit()">Cancel</button>
@@ -286,6 +291,9 @@
     </div>
   </div>
 </div>
+
+<!-- Notification toast container -->
+<div id="notification-container"></div>
 
 <script src="js/sodium-loader.js"></script>
 <script src="js/tauri-bridge.js"></script>

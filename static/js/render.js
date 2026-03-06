@@ -62,6 +62,16 @@ export function renderRichContent(raw) {
   text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
   text = text.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
+  // @mentions
+  text = text.replace(/@(channel|server)\b/g, (m, kind) =>
+    `<span class="mention mention-${kind}">@${kind}</span>`
+  );
+  text = text.replace(/@(\w+)/g, (m, name) => {
+    if (name === 'channel' || name === 'server') return m; // already handled
+    const isSelf = name === state.currentUser;
+    return `<span class="mention${isSelf ? ' mention-self' : ''}" data-mention="${escapeHtml(name)}">@${escapeHtml(name)}</span>`;
+  });
+
   // Links [text](url) — only allow http/https URLs
   text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)"]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 

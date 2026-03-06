@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+// ── Reply-to reference ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplyRef {
+    pub message_id: String,
+    pub author: String,
+    pub snippet: String,
+}
+
 // ── Client → Server messages ────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,6 +29,8 @@ pub enum ClientMsg {
         attachments: Option<Vec<String>>,
         #[serde(default)]
         encrypted: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to: Option<ReplyRef>,
     },
     /// Join a channel (creates it if it doesn't exist)
     Join { channel: String },
@@ -113,6 +124,10 @@ pub enum ClientMsg {
     ProvideChannelKey { channel: String, target_user: String, encrypted_key: String },
     RotateChannelKey { channel: String, new_keys: HashMap<String, String> },
 
+    // ── Preferences ──
+    GetPreferences,
+    SetPreference { key: String, value: String },
+
     // ── Widgets ──
     WidgetMessage {
         channel: String,
@@ -149,6 +164,10 @@ pub enum ServerMsg {
         edited_at: Option<DateTime<Utc>>,
         #[serde(default)]
         encrypted: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply_to: Option<ReplyRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mentions: Option<Vec<String>>,
     },
     /// Channel history batch
     History { channel: String, messages: Vec<HistoryMessage> },
@@ -231,6 +250,9 @@ pub enum ServerMsg {
     ChannelEncrypted { channel: String },
     ChannelKeyRotated { channel: String, key_version: i32 },
 
+    // ── Preferences ──
+    Preferences { prefs: HashMap<String, String> },
+
     // ── Widgets ──
     WidgetBroadcast {
         channel: String,
@@ -254,6 +276,10 @@ pub struct HistoryMessage {
     pub edited_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub encrypted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ReplyRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -474,6 +500,8 @@ impl ServerMsg {
         expires_at: Option<DateTime<Utc>>,
         attachments: Option<Vec<FileInfo>>,
         encrypted: bool,
+        reply_to: Option<ReplyRef>,
+        mentions: Option<Vec<String>>,
     ) -> Self {
         ServerMsg::Message {
             id: Uuid::new_v4().to_string(),
@@ -485,6 +513,8 @@ impl ServerMsg {
             attachments,
             edited_at: None,
             encrypted,
+            reply_to,
+            mentions,
         }
     }
 }

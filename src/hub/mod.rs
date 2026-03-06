@@ -218,8 +218,8 @@ impl Hub {
                 }
             }
 
-            ClientMsg::Send { channel, content, ttl_secs, attachments, encrypted } => {
-                self.handle_send(id, channel, content, ttl_secs, attachments, encrypted).await;
+            ClientMsg::Send { channel, content, ttl_secs, attachments, encrypted, reply_to } => {
+                self.handle_send(id, channel, content, ttl_secs, attachments, encrypted, reply_to).await;
             }
 
             ClientMsg::Join { channel } => {
@@ -412,6 +412,40 @@ impl Hub {
 
             ClientMsg::ListDMs => {
                 self.handle_list_dms(id).await;
+            }
+
+            ClientMsg::GetPreferences => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                drop(clients);
+                let prefs = self.db.get_user_preferences(&username);
+                self.send_msg(id, &ServerMsg::Preferences { prefs }).await;
+            }
+
+            ClientMsg::SetPreference { key, value } => {
+                let clients = self.clients.lock().await;
+                let username = match clients.get(&id) {
+                    Some(c) if !c.username.is_empty() => c.username.clone(),
+                    _ => return,
+                };
+                drop(clients);
+                // Validate preference keys
+                let valid_keys = ["notify_mention", "notify_channel_mention", "notify_server_mention"];
+                let valid_values = ["window", "system", "none"];
+                if !valid_keys.contains(&key.as_str()) {
+                    self.send_error(id, "Invalid preference key").await;
+                    return;
+                }
+                if !valid_values.contains(&value.as_str()) {
+                    self.send_error(id, "Invalid preference value (must be 'window', 'system', or 'none')").await;
+                    return;
+                }
+                self.db.set_user_preference(&username, &key, &value);
+                let prefs = self.db.get_user_preferences(&username);
+                self.send_msg(id, &ServerMsg::Preferences { prefs }).await;
             }
 
             ClientMsg::WidgetMessage { channel, widget_id, action, data } => {

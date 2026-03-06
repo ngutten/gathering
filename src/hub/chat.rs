@@ -1,8 +1,9 @@
 use chrono::{Duration, Utc};
+use regex::Regex;
 
 use super::Hub;
 use crate::db::Db;
-use crate::protocol::ServerMsg;
+use crate::protocol::{ReplyRef, ServerMsg};
 
 const MAX_MESSAGE_SIZE: usize = 32 * 1024; // 32KB
 const MAX_CHANNEL_NAME_LEN: usize = 64;
@@ -18,6 +19,7 @@ impl Hub {
         ttl_secs: Option<u64>,
         attachments: Option<Vec<String>>,
         encrypted: bool,
+        reply_to: Option<ReplyRef>,
     ) {
         // Input validation (S11)
         if content.len() > MAX_MESSAGE_SIZE {
@@ -53,6 +55,26 @@ impl Hub {
 
         let expires_at = ttl_secs.map(|s| Utc::now() + Duration::seconds(s as i64));
 
+        // Parse @mentions from content
+        let mentions = Self::parse_mentions(&content, &username, &channel, &clients, &self.db);
+
+        // Check permissions for @channel/@server mentions
+        if !encrypted {
+            let mention_re = Regex::new(r"@(channel|server)\b").unwrap();
+            for cap in mention_re.captures_iter(&content) {
+                let kind = &cap[1];
+                let perm = format!("mention_{}", kind);
+                if !self.db.user_has_permission(&username, &perm) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error(
+                            &format!("Permission denied: @{kind} mentions require '{perm}' permission")
+                        ));
+                    }
+                    return;
+                }
+            }
+        }
+
         // Resolve attachment file IDs to FileInfo
         let file_infos = attachments.as_ref().map(|ids| {
             ids.iter()
@@ -60,7 +82,9 @@ impl Hub {
                 .collect::<Vec<_>>()
         }).filter(|v| !v.is_empty());
 
-        let msg = ServerMsg::message(&channel, &username, &content, expires_at, file_infos, encrypted);
+        let mentions_opt = if mentions.is_empty() { None } else { Some(mentions.clone()) };
+
+        let msg = ServerMsg::message(&channel, &username, &content, expires_at, file_infos, encrypted, reply_to.clone(), mentions_opt.clone());
 
         // Store in database
         if let ServerMsg::Message {
@@ -72,11 +96,53 @@ impl Hub {
                 timestamp, expires_at.as_ref(),
                 attachments.as_ref(),
                 encrypted,
+                reply_to.as_ref(),
+                mentions_opt.as_ref(),
             );
         }
 
         // Broadcast to everyone in the channel
         Self::broadcast_to_channel_inner(&clients, &channel, &msg, None);
+    }
+
+    fn parse_mentions(
+        content: &str,
+        author: &str,
+        channel: &str,
+        clients: &std::collections::HashMap<usize, super::Client>,
+        db: &std::sync::Arc<crate::db::Db>,
+    ) -> Vec<String> {
+        let mention_re = Regex::new(r"@(\w+)").unwrap();
+        let mut mentioned = std::collections::HashSet::new();
+
+        for cap in mention_re.captures_iter(content) {
+            let name = &cap[1];
+            match name {
+                "channel" => {
+                    // Expand to all users in this channel (except author)
+                    for client in clients.values() {
+                        if !client.username.is_empty() && client.username != author && client.channels.contains(channel) {
+                            mentioned.insert(client.username.clone());
+                        }
+                    }
+                }
+                "server" => {
+                    // Expand to all online users (except author)
+                    for client in clients.values() {
+                        if !client.username.is_empty() && client.username != author {
+                            mentioned.insert(client.username.clone());
+                        }
+                    }
+                }
+                _ => {
+                    if name != author && db.user_exists(name) {
+                        mentioned.insert(name.to_string());
+                    }
+                }
+            }
+        }
+
+        mentioned.into_iter().collect()
     }
 
     pub(super) async fn handle_join(&self, id: usize, channel: String) {

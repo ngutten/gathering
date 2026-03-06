@@ -4,7 +4,7 @@ import state, { on } from './state.js';
 import { connectWS } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
-import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply } from './chat-ui.js';
 import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, removePendingFile, startEditMessage, cancelEdit, deleteMessage, joinChannel } from './input.js';
 import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
@@ -13,6 +13,7 @@ import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest, 
 import { toggleEmojiPicker } from './emoji.js';
 import { openFileManager, closeFileManager, toggleFilePin, deleteUserFile, downloadFile } from './files.js';
 import { toggleSearch, closeSearch, executeSearch, scrollToMessage } from './search.js';
+import { setNotifPref } from './notifications.js';
 import { toggleWidgetPicker, toggleWidget, deactivateWidget, getActiveWidgets, onChannelSwitch as widgetChannelSwitch } from './widgets/widget-api.js';
 import { send } from './transport.js';
 // Import widgets to register them
@@ -115,6 +116,9 @@ window.toggleChannelRestricted = toggleChannelRestricted;
 window.addChannelMember = addChannelMember;
 window.removeChannelMember = removeChannelMember;
 window.requestChannelKey = requestChannelKey;
+window.startReply = startReply;
+window.cancelReply = cancelReply;
+window.setNotifPref = setNotifPref;
 window.toggleWidgetPicker = toggleWidgetPicker;
 window.toggleWidget = (widgetId) => toggleWidget(state.currentChannel, widgetId);
 window.deactivateCurrentWidget = (widgetId) => deactivateWidget(state.currentChannel, widgetId);

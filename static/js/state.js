@@ -11,6 +11,8 @@ const state = {
   userRoles: [],
   isAdmin: false,
   editingMessageId: null,
+  replyTo: null,
+  notificationPrefs: {},
 
   // DM state
   dmChannels: {},

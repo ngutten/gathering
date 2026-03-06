@@ -4,7 +4,7 @@ import state, { isDMChannel } from './state.js';
 import { send, apiFetch } from './transport.js';
 import { encryptFile, encryptChannelKeyForUser, generateChannelKey, tryEncrypt } from './crypto.js';
 import { escapeHtml, formatFileSize } from './render.js';
-import { appendSystem } from './chat-ui.js';
+import { appendSystem, cancelReply } from './chat-ui.js';
 
 const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_INPUT_HEIGHT_PX = 120;
@@ -40,6 +40,11 @@ export function sendMessage() {
     msg.attachments = state.pendingAttachments.map(f => f.id);
   }
 
+  if (state.replyTo) {
+    msg.reply_to = state.replyTo;
+    cancelReply();
+  }
+
   send('Send', msg);
   input.value = '';
   input.style.height = 'auto';
@@ -53,9 +58,9 @@ export function handleInputKey(e) {
     sendMessage();
     return;
   }
-  if (e.key === 'Escape' && state.editingMessageId) {
-    cancelEdit();
-    return;
+  if (e.key === 'Escape') {
+    if (state.editingMessageId) { cancelEdit(); return; }
+    if (state.replyTo) { cancelReply(); return; }
   }
   if (e.key === 'ArrowUp' && !state.editingMessageId) {
     const input = document.getElementById('msg-input');

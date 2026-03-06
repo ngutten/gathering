@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use super::Db;
-use crate::protocol::HistoryMessage;
+use crate::protocol::{HistoryMessage, ReplyRef};
 
 impl Db {
     pub fn store_message(
@@ -15,15 +15,21 @@ impl Db {
         expires_at: Option<&DateTime<Utc>>,
         attachments: Option<&Vec<String>>,
         encrypted: bool,
+        reply_to: Option<&ReplyRef>,
+        mentions: Option<&Vec<String>>,
     ) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let ts = timestamp.to_rfc3339();
         let exp = expires_at.map(|e| e.to_rfc3339());
         let att_json = attachments.map(|a| serde_json::to_string(a).unwrap_or_default());
+        let reply_id = reply_to.as_ref().map(|r| r.message_id.as_str());
+        let reply_author = reply_to.as_ref().map(|r| r.author.as_str());
+        let reply_snippet = reply_to.as_ref().map(|r| r.snippet.as_str());
+        let mentions_json = mentions.map(|m| serde_json::to_string(m).unwrap_or_default());
         if let Err(e) = conn.execute(
-            "INSERT INTO messages (id, channel, author, content, timestamp, expires_at, attachments, encrypted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, channel, author, content, ts, exp, att_json, encrypted as i32],
+            "INSERT INTO messages (id, channel, author, content, timestamp, expires_at, attachments, encrypted, reply_to_id, reply_to_author, reply_to_snippet, mentions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![id, channel, author, content, ts, exp, att_json, encrypted as i32, reply_id, reply_author, reply_snippet, mentions_json],
         ) {
             eprintln!("[db::messages] store_message insert failed: {e}");
         }
@@ -34,7 +40,7 @@ impl Db {
         let now = Utc::now().to_rfc3339();
 
         let mut stmt = match conn.prepare(
-                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted FROM messages
+                "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted, reply_to_id, reply_to_author, reply_to_snippet, mentions FROM messages
                  WHERE channel = ?1
                    AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY timestamp DESC LIMIT ?3",
@@ -43,19 +49,27 @@ impl Db {
             Err(e) => { eprintln!("[db::messages] get_history prepare failed: {e}"); return Vec::new(); }
         };
 
-        let rows: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>, bool)> = match stmt.query_map(params![channel, now, limit], |row| {
-                let ts_str: String = row.get(3)?;
-                let exp_str: Option<String> = row.get(4)?;
-                let att_str: Option<String> = row.get(5)?;
-                let edited_str: Option<String> = row.get(6)?;
-                let encrypted: bool = row.get::<_, i32>(7).unwrap_or(0) != 0;
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, ts_str, exp_str, att_str, edited_str, encrypted))
+        let rows = match stmt.query_map(params![channel, now, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, i32>(7).unwrap_or(0) != 0,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                ))
             }) {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect::<Vec<_>>(),
             Err(e) => { eprintln!("[db::messages] get_history query failed: {e}"); return Vec::new(); }
         };
 
-        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted)| {
+        let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted, reply_id, reply_author, reply_snippet, mentions_str)| {
             let attachments = att_str
                 .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
                 .map(|ids| {
@@ -68,6 +82,16 @@ impl Db {
             let edited_at = edited_str.and_then(|s| {
                 DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
             });
+
+            let reply_to = reply_id.map(|rid| ReplyRef {
+                message_id: rid,
+                author: reply_author.unwrap_or_default(),
+                snippet: reply_snippet.unwrap_or_default(),
+            });
+
+            let mentions = mentions_str
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .filter(|v| !v.is_empty());
 
             HistoryMessage {
                 id,
@@ -82,6 +106,8 @@ impl Db {
                 attachments,
                 edited_at,
                 encrypted,
+                reply_to,
+                mentions,
             }
         }).collect();
 

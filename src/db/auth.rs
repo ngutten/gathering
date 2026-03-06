@@ -81,4 +81,13 @@ impl Db {
             eprintln!("[db::auth] delete_session failed: {e}");
         }
     }
+
+    pub fn user_exists(&self, username: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM users WHERE username = ?1",
+            params![username],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false)
+    }
 }

@@ -486,6 +486,7 @@ dependencies = [
  "password-hash",
  "rand",
  "rcgen",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

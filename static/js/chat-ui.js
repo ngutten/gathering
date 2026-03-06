@@ -8,6 +8,7 @@ import { apiUrl, fileUrl } from './config.js';
 
 const TYPING_INDICATOR_TIMEOUT_MS = 3000;
 const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
+const MSG_GROUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 
 export function appendMessage(msg) {
@@ -18,6 +19,7 @@ export function appendMessage(msg) {
   div.className = 'msg';
   div.setAttribute('data-msg-id', msg.id);
   div.setAttribute('data-author', msg.author);
+  div.setAttribute('data-timestamp', msg.timestamp);
 
   const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const ttlHtml = renderTtlBadge(msg.expires_at);
@@ -47,12 +49,29 @@ export function appendMessage(msg) {
   const isOwn = msg.author === state.currentUser;
   if (isOwn || state.isAdmin) {
     actionsHtml = '<div class="msg-actions">';
+    actionsHtml += `<button onclick="startReply('${msg.id}')">reply</button>`;
     if (isOwn) actionsHtml += `<button onclick="startEditMessage('${msg.id}')">edit</button>`;
     actionsHtml += `<button class="del-btn" onclick="deleteMessage('${msg.id}')">del</button>`;
     actionsHtml += '</div>';
+  } else {
+    actionsHtml = '<div class="msg-actions"><button onclick="startReply(\''+msg.id+'\')">reply</button></div>';
   }
 
-  div.innerHTML = `${actionsHtml}
+  // Reply reference bar
+  let replyHtml = '';
+  if (msg.reply_to) {
+    replyHtml = `<div class="reply-ref" data-reply-id="${escapeHtml(msg.reply_to.message_id)}" onclick="scrollToMessage('${escapeHtml(msg.reply_to.message_id)}')">
+      <span class="reply-author">@${escapeHtml(msg.reply_to.author)}</span>: ${escapeHtml(msg.reply_to.snippet)}
+    </div>`;
+  }
+
+  // Message consolidation: check if same author and within 5 minutes
+  const isContinuation = checkContinuation(el, msg);
+  if (isContinuation) {
+    div.classList.add('msg-continuation');
+  }
+
+  div.innerHTML = `${actionsHtml}${replyHtml}
     <div class="meta">
       <span class="author">${escapeHtml(msg.author)}</span>
       <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}
@@ -63,6 +82,41 @@ export function appendMessage(msg) {
 
   // Decrypt and render any encrypted attachments now that they're in the DOM
   decryptAndRenderAttachments(msg.attachments);
+}
+
+function checkContinuation(container, msg) {
+  // Find the last non-system .msg element
+  const allMsgs = container.querySelectorAll('.msg:not(.system)');
+  if (allMsgs.length === 0) return false;
+  const lastMsg = allMsgs[allMsgs.length - 1];
+  const lastAuthor = lastMsg.getAttribute('data-author');
+  const lastTs = lastMsg.getAttribute('data-timestamp');
+  if (!lastAuthor || !lastTs) return false;
+  if (lastAuthor !== msg.author) return false;
+  if (msg.reply_to) return false; // replies break grouping
+  const diff = new Date(msg.timestamp) - new Date(lastTs);
+  return diff >= 0 && diff < MSG_GROUP_WINDOW_MS;
+}
+
+export function startReply(msgId) {
+  const msgEl = document.querySelector(`.msg[data-msg-id="${msgId}"]`);
+  if (!msgEl) return;
+  const author = msgEl.getAttribute('data-author');
+  const content = msgEl.getAttribute('data-content') || '';
+  const snippet = content.substring(0, 100);
+  state.replyTo = { message_id: msgId, author, snippet };
+  const banner = document.getElementById('reply-banner');
+  if (banner) {
+    banner.querySelector('.reply-banner-text').textContent = `Replying to @${author}: ${snippet}`;
+    banner.classList.add('active');
+  }
+  document.getElementById('msg-input').focus();
+}
+
+export function cancelReply() {
+  state.replyTo = null;
+  const banner = document.getElementById('reply-banner');
+  if (banner) banner.classList.remove('active');
 }
 
 export function appendSystem(text) {
