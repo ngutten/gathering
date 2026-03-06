@@ -6,7 +6,8 @@
       "Bash(git add:*)",
       "Bash(grep:*)",
       "Bash(cargo check:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(cargo test:*)"
     ]
   }
 }

@@ -1,7 +1,8 @@
-mod db;
-mod hub;
-mod protocol;
 mod tls;
+
+use gathering::db;
+use gathering::hub;
+use gathering::protocol;
 
 use axum::{
     Extension, Router,
