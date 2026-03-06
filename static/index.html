@@ -88,10 +88,18 @@
         <button class="files-btn" onclick="openFileManager()">Files</button>
       </div>
       <div class="sidebar-bottom">
-        <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code></div>
-        <div style="display:flex;gap:0.3rem;">
-          <button onclick="exportPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Export Key</button>
-          <button onclick="importPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Import Key</button>
+        <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code><span id="no-key-label" style="font-size:0.65rem;color:var(--red);">No key set</span></div>
+        <div id="e2e-has-key" style="display:none;">
+          <div style="display:flex;gap:0.3rem;">
+            <button onclick="exportPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Export Key</button>
+            <button onclick="importPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Import Key</button>
+          </div>
+        </div>
+        <div id="e2e-no-key">
+          <div style="display:flex;gap:0.3rem;">
+            <button onclick="generateNewE2EKey()" style="padding:0.15rem 0.4rem;background:var(--green);color:#000;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.65rem;">Generate Key</button>
+            <button onclick="importPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Import Key</button>
+          </div>
         </div>
       </div>
     </div>

@@ -9,7 +9,7 @@ import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, remo
 import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
 import { openAdminPanel, closeAdminPanel, switchAdminTab, updateSetting, deleteChannel, createInvite, assignRoleToUser, removeRoleFromUser } from './admin.js';
-import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest } from './crypto.js';
+import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest, generateE2EKey, rekeyChannel } from './crypto.js';
 import { toggleEmojiPicker } from './emoji.js';
 import { openFileManager, closeFileManager, toggleFilePin, deleteUserFile, downloadFile } from './files.js';
 import { toggleSearch, closeSearch, executeSearch, scrollToMessage } from './search.js';
@@ -86,6 +86,19 @@ window.exportPrivateKey = exportPrivateKey;
 window.importPrivateKey = importPrivateKey;
 window.approveKeyRequest = approveKeyRequest;
 window.denyKeyRequest = denyKeyRequest;
+window.generateNewE2EKey = function() {
+  if (state.myKeyPair) {
+    if (!confirm('You already have an E2E key. Generating a new one will make all previously encrypted messages unreadable unless you have a backup. Continue?')) return;
+    generateE2EKey(true);
+  } else {
+    generateE2EKey(false);
+  }
+};
+window.rekeyChannel = function(channel) {
+  const ch = channel || state.currentChannel;
+  if (!confirm('WARNING: Re-keying this channel is equivalent to deleting and recreating it. All existing encrypted messages, topics, and files will become permanently unreadable to everyone. This cannot be undone.\n\nContinue?')) return;
+  rekeyChannel(ch);
+};
 window.toggleEmojiPicker = toggleEmojiPicker;
 window.openFileManager = openFileManager;
 window.closeFileManager = closeFileManager;

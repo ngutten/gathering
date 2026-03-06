@@ -86,70 +86,49 @@ impl Hub {
             return;
         }
 
-        // DM channels: only members can join, no creation via Join
-        if Db::is_dm_channel(&channel) {
-            let clients = self.clients.lock().await;
-            let username = match clients.get(&id) {
-                Some(c) if !c.username.is_empty() => c.username.clone(),
-                _ => return,
-            };
-            if !self.db.is_dm_member(&channel, &username) {
-                if let Some(client) = clients.get(&id) {
-                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Cannot join this DM channel")) {
-                        eprintln!("[hub::chat] send DM join denied error failed: {e:?}");
-                    }
-                }
-                return;
-            }
-            drop(clients);
-        } else if self.db.channel_exists(&channel) {
-            // Existing channel: check access for restricted channels
-            let clients = self.clients.lock().await;
-            let username = match clients.get(&id) {
-                Some(c) if !c.username.is_empty() => c.username.clone(),
-                _ => return,
-            };
-            if !self.db.can_access_channel(&channel, &username) {
-                if let Some(client) = clients.get(&id) {
-                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted")) {
-                        eprintln!("[hub::chat] send channel access denied error failed: {e:?}");
-                    }
-                }
-                return;
-            }
-            drop(clients);
-        } else if !self.db.channel_exists(&channel) {
-            // Check channel creation permission
-            let clients = self.clients.lock().await;
-            let username = match clients.get(&id) {
-                Some(c) if !c.username.is_empty() => c.username.clone(),
-                _ => return,
-            };
-            let creation_mode = self.db.get_setting("channel_creation").unwrap_or_else(|| "all".to_string());
-            if creation_mode == "admin" && !self.db.user_has_permission(&username, "create_channel") {
-                if let Some(client) = clients.get(&id) {
-                    if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels")) {
-                        eprintln!("[hub::chat] send channel creation denied error failed: {e:?}");
-                    }
-                }
-                return;
-            }
-            drop(clients);
-        }
-
-        // Get username to record as creator if new channel
+        // Single lock acquisition for all pre-join checks
         {
             let clients = self.clients.lock().await;
             let username = match clients.get(&id) {
                 Some(c) if !c.username.is_empty() => c.username.clone(),
                 _ => return,
             };
+
+            if Db::is_dm_channel(&channel) {
+                // DM channels: only members can join, no creation via Join
+                if !self.db.is_dm_member(&channel, &username) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot join this DM channel"));
+                    }
+                    return;
+                }
+            } else if self.db.channel_exists(&channel) {
+                // Existing channel: check access for restricted channels
+                if !self.db.can_access_channel(&channel, &username) {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted"));
+                    }
+                    return;
+                }
+            } else {
+                // New channel: check channel creation permission
+                let creation_mode = self.db.get_setting("channel_creation").unwrap_or_else(|| "all".to_string());
+                if creation_mode == "admin" && !self.db.user_has_permission(&username, "create_channel") {
+                    if let Some(client) = clients.get(&id) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Only admins can create channels"));
+                    }
+                    return;
+                }
+            }
+
+            // Create channel if needed (still under same logical flow, DB has its own lock)
             if !self.db.channel_exists(&channel) {
                 self.db.ensure_channel_with_creator(&channel, &username);
             } else {
                 self.db.ensure_channel(&channel);
             }
         }
+
         let mut clients = self.clients.lock().await;
         let (username, already_joined) = match clients.get_mut(&id) {
             Some(c) if !c.username.is_empty() => {

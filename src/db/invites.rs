@@ -21,10 +21,13 @@ impl Db {
 
     pub fn list_invites(&self) -> Vec<InviteInfo> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT code, created_by, created_at, used_by, used_at FROM invite_codes ORDER BY created_at DESC"
-        ).unwrap();
-        stmt.query_map([], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::invites] list_invites prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map([], |row| {
             Ok(InviteInfo {
                 code: row.get(0)?,
                 created_by: row.get(1)?,
@@ -32,7 +35,11 @@ impl Db {
                 used_by: row.get(3)?,
                 used_at: row.get(4)?,
             })
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::invites] list_invites query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn validate_invite(&self, code: &str) -> Result<(), String> {
@@ -49,13 +56,18 @@ impl Db {
         Ok(())
     }
 
+    /// Atomically validate and consume an invite code. Returns error if code
+    /// is invalid or was already used (prevents TOCTOU race).
     pub fn use_invite(&self, code: &str, username: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
-        conn.execute(
+        let rows = conn.execute(
             "UPDATE invite_codes SET used_by = ?2, used_at = ?3 WHERE code = ?1 AND used_by IS NULL",
             params![code, username, now],
         ).map_err(|e| e.to_string())?;
+        if rows == 0 {
+            return Err("Invite code is invalid or already used".into());
+        }
         Ok(())
     }
 }

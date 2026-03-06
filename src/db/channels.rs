@@ -37,34 +37,39 @@ impl Db {
             return Err("Cannot delete the general channel".into());
         }
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE channel = ?1)",
-            params![name],
-        ).map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM topics WHERE channel = ?1", params![name])
-            .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM messages WHERE channel = ?1", params![name])
-            .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM files WHERE channel = ?1", params![name])
-            .map_err(|e| e.to_string())?;
-        if let Err(e) = conn.execute("DELETE FROM channel_keys WHERE channel = ?1", params![name]) {
-            eprintln!("[db::channels] delete channel_keys on channel delete failed: {e}");
+        conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+        let result = (|| -> Result<(), String> {
+            conn.execute(
+                "DELETE FROM topic_replies WHERE topic_id IN (SELECT id FROM topics WHERE channel = ?1)",
+                params![name],
+            ).map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM topics WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM messages WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM files WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM channel_keys WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM channel_encryption WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM channel_members WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM dm_members WHERE channel = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            let rows = conn.execute("DELETE FROM channels WHERE name = ?1", params![name])
+                .map_err(|e| e.to_string())?;
+            if rows == 0 {
+                return Err("Channel not found".into());
+            }
+            Ok(())
+        })();
+        if result.is_ok() {
+            conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        } else {
+            let _ = conn.execute_batch("ROLLBACK");
         }
-        if let Err(e) = conn.execute("DELETE FROM channel_encryption WHERE channel = ?1", params![name]) {
-            eprintln!("[db::channels] delete channel_encryption on channel delete failed: {e}");
-        }
-        if let Err(e) = conn.execute("DELETE FROM channel_members WHERE channel = ?1", params![name]) {
-            eprintln!("[db::channels] delete channel_members on channel delete failed: {e}");
-        }
-        if let Err(e) = conn.execute("DELETE FROM dm_members WHERE channel = ?1", params![name]) {
-            eprintln!("[db::channels] delete dm_members on channel delete failed: {e}");
-        }
-        let rows = conn.execute("DELETE FROM channels WHERE name = ?1", params![name])
-            .map_err(|e| e.to_string())?;
-        if rows == 0 {
-            return Err("Channel not found".into());
-        }
-        Ok(())
+        result
     }
 
     pub fn create_channel_with_type(&self, name: &str, channel_type: &str) {
@@ -87,13 +92,17 @@ impl Db {
 
     pub fn list_channels_with_type(&self) -> Vec<(String, String)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT name, COALESCE(channel_type, 'text') FROM channels ORDER BY name"
-        ).unwrap();
-        stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::channels] list_channels_with_type prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::channels] list_channels_with_type query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn set_channel_restricted(&self, channel: &str, restricted: bool) {

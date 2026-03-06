@@ -6,11 +6,24 @@ const MAX_SEARCH_RESULTS: u32 = 50;
 impl Hub {
     pub(super) async fn handle_search_messages(&self, id: usize, query: String, channel: Option<String>) {
         let clients = self.clients.lock().await;
-        let _username = match clients.get(&id) {
+        let username = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => c.username.clone(),
             _ => return,
         };
-        let results = self.db.search_messages(&query, channel.as_deref(), MAX_SEARCH_RESULTS);
+        // If searching a specific channel, verify access
+        if let Some(ref ch) = channel {
+            if !self.db.can_access_channel(ch, &username) {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted"));
+                }
+                return;
+            }
+        }
+        let mut results = self.db.search_messages(&query, channel.as_deref(), MAX_SEARCH_RESULTS);
+        // Filter out results from channels the user can't access
+        if channel.is_none() {
+            results.retain(|r| self.db.can_access_channel(&r.channel, &username));
+        }
         if let Some(client) = clients.get(&id) {
             if let Err(e) = Self::send_to(&client.tx, &ServerMsg::SearchResults { query, results }) {
                 eprintln!("[hub::files] send search results failed: {e:?}");
@@ -86,21 +99,23 @@ impl Hub {
             }
         }
         if let Some((_fid, filename)) = self.db.delete_file_record(&file_id) {
-            // Delete from disk
+            // Delete from disk (compute path and drop lock before async I/O)
             let ext = std::path::Path::new(&filename)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("bin");
             let disk_name = format!("{}.{}", file_id, ext);
             let file_path = self.data_dir.join("uploads").join(&disk_name);
-            if let Err(e) = std::fs::remove_file(&file_path) {
-                eprintln!("[hub::files] remove file from disk failed: {e}");
-            }
 
             if let Some(client) = clients.get(&id) {
                 if let Err(e) = Self::send_to(&client.tx, &ServerMsg::FileDeleted { file_id }) {
                     eprintln!("[hub::files] send file deleted confirmation failed: {e:?}");
                 }
+            }
+            drop(clients);
+
+            if let Err(e) = tokio::fs::remove_file(&file_path).await {
+                eprintln!("[hub::files] remove file from disk failed: {e}");
             }
         }
     }

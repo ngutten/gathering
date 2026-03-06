@@ -89,7 +89,8 @@ export function renderChannels() {
     const unread = state.unreadCounts[ch.name] || 0;
     const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
-    return `<div class="channel-item${boldClass} ${ch.name === state.currentChannel ? 'active' : ''}"
+    const noKeyClass = ch.encrypted && !state.e2eReady ? ' no-e2e-key' : '';
+    return `<div class="channel-item${boldClass}${noKeyClass} ${ch.name === state.currentChannel ? 'active' : ''}"
          onclick="switchChannel('${escapeHtml(ch.name)}')">
       <span>${lock}${escapeHtml(ch.name)}</span>
       <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
@@ -165,7 +166,8 @@ export function renderDMList() {
     const unread = state.unreadCounts[ch] || 0;
     const unreadBadge = unread > 0 ? `<span class="unread-badge">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
-    return `<div class="dm-item${boldClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
+    const noKeyClass = !state.e2eReady ? ' no-e2e-key' : '';
+    return `<div class="dm-item${boldClass}${noKeyClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
       <span class="dm-name">&#x1F512; ${escapeHtml(other)}</span>
       ${unreadBadge}
     </div>`;
@@ -326,6 +328,14 @@ export function renderChannelMemberPanel(msg) {
     }
   }
 
+  // Re-key button for encrypted channels
+  if (state.encryptedChannels.has(msg.channel) && state.channelKeys[msg.channel]) {
+    html += `<div style="margin-top:0.7rem;padding-top:0.5rem;border-top:1px solid var(--border);">
+      <div style="font-size:0.7rem;color:var(--red);margin-bottom:0.3rem;">Danger Zone</div>
+      <button class="admin-btn-sm danger" onclick="rekeyChannel('${escapeHtml(msg.channel)}')" title="All existing messages will become permanently unreadable">Re-key Channel</button>
+    </div>`;
+  }
+
   content.innerHTML = html;
   overlay.classList.add('active');
 }
@@ -393,7 +403,9 @@ export function switchChannel(name) {
   // Emit after Join so the server has registered us in the channel
   // before widget presence requests are sent
   emit('channel-switched', name);
-  if (state.encryptedChannels.has(name) && !state.channelKeys[name] && state.e2eReady) {
+  if (state.encryptedChannels.has(name) && !state.e2eReady) {
+    appendSystem('This is an encrypted channel. Generate or import an E2E key (bottom of sidebar) to participate.');
+  } else if (state.encryptedChannels.has(name) && !state.channelKeys[name] && state.e2eReady) {
     send('RequestChannelKey', { channel: name });
   }
 }

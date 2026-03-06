@@ -17,7 +17,9 @@ impl Hub {
     }
 
     pub(super) async fn handle_get_public_keys(&self, id: usize, usernames: Vec<String>) {
-        let keys = self.db.get_public_keys(&usernames);
+        // Limit to prevent abuse (100 keys at a time is plenty)
+        let capped: Vec<String> = usernames.into_iter().take(100).collect();
+        let keys = self.db.get_public_keys(&capped);
         self.send_msg(id, &ServerMsg::PublicKeys { keys }).await;
     }
 
@@ -105,10 +107,19 @@ impl Hub {
 
     pub(super) async fn handle_rotate_channel_key(&self, id: usize, channel: String, new_keys: std::collections::HashMap<String, String>) {
         let clients = self.clients.lock().await;
-        let _username = match clients.get(&id) {
-            Some(c) if !c.username.is_empty() => c.username.clone(),
+        let (username, in_channel) = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
             _ => return,
         };
+
+        // Must be a member of the channel to rotate keys
+        if !in_channel {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+            }
+            return;
+        }
+        let _ = username;
 
         let new_version = self.db.increment_channel_key_version(&channel);
 

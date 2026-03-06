@@ -132,8 +132,9 @@ async fn main() {
 
     tls::ensure_tls(&data_dir);
 
-    // Spawn message expiry task
+    // Spawn message expiry + rate limiter cleanup task
     let expiry_db = db.clone();
+    let rate_limiter_ref = state.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(EXPIRY_PURGE_INTERVAL_SECS)).await;
@@ -148,6 +149,12 @@ async fn main() {
                 if expired > 0 {
                     tracing::info!("Voice TTL: expired {} messages in #{}", expired, channel);
                 }
+            }
+            // Clean up stale rate limiter entries
+            {
+                let mut limiter = rate_limiter_ref.rate_limiter.lock().await;
+                let now = Instant::now();
+                limiter.retain(|_, (_, ts)| now.duration_since(*ts).as_secs() < RATE_LIMIT_WINDOW_SECS * 2);
             }
         }
     });
@@ -590,32 +597,34 @@ async fn handle_download(
     let content_disposition = format!("inline; filename=\"{}\"", safe_filename);
 
     // Parse Range header for audio/video seek support
-    if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
-        if let Some(range) = range_val.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range.splitn(2, '-').collect();
-            if parts.len() == 2 {
-                let start: usize = parts[0].parse().unwrap_or(0);
-                let end: usize = if parts[1].is_empty() {
-                    total - 1
-                } else {
-                    parts[1].parse().unwrap_or(total - 1).min(total - 1)
-                };
+    if total > 0 {
+        if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
+            if let Some(range) = range_val.strip_prefix("bytes=") {
+                let parts: Vec<&str> = range.splitn(2, '-').collect();
+                if parts.len() == 2 {
+                    let start: usize = parts[0].parse().unwrap_or(0);
+                    let end: usize = if parts[1].is_empty() {
+                        total - 1
+                    } else {
+                        parts[1].parse().unwrap_or(total - 1).min(total - 1)
+                    };
 
-                if start <= end && start < total {
-                    let slice = data[start..=end].to_vec();
-                    let content_range = format!("bytes {}-{}/{}", start, end, total);
+                    if start <= end && start < total {
+                        let slice = data[start..=end].to_vec();
+                        let content_range = format!("bytes {}-{}/{}", start, end, total);
 
-                    return Ok((
-                        StatusCode::PARTIAL_CONTENT,
-                        [
-                            (header::CONTENT_TYPE, file_info.mime_type),
-                            (header::CONTENT_DISPOSITION, content_disposition),
-                            (header::ACCEPT_RANGES, "bytes".to_string()),
-                            (header::CONTENT_RANGE, content_range),
-                            (header::CONTENT_LENGTH, slice.len().to_string()),
-                        ],
-                        slice,
-                    ));
+                        return Ok((
+                            StatusCode::PARTIAL_CONTENT,
+                            [
+                                (header::CONTENT_TYPE, file_info.mime_type),
+                                (header::CONTENT_DISPOSITION, content_disposition),
+                                (header::ACCEPT_RANGES, "bytes".to_string()),
+                                (header::CONTENT_RANGE, content_range),
+                                (header::CONTENT_LENGTH, slice.len().to_string()),
+                            ],
+                            slice,
+                        ));
+                    }
                 }
             }
         }
@@ -641,10 +650,10 @@ fn mime_from_ext(ext: &str) -> String {
         "png" => "image/png",
         "gif" => "image/gif",
         "webp" => "image/webp",
-        "svg" => "image/svg+xml",
+        "svg" => "application/octet-stream", // don't serve inline (SVG can contain JS)
         "pdf" => "application/pdf",
         "txt" => "text/plain",
-        "html" | "htm" => "text/html",
+        "html" | "htm" => "application/octet-stream", // don't serve inline (HTML can contain JS)
         "css" => "text/css",
         "js" => "application/javascript",
         "json" => "application/json",
@@ -808,29 +817,31 @@ async fn handle_music_download(
         .collect();
 
     // Range request support for seeking
-    if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
-        if let Some(range) = range_val.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range.splitn(2, '-').collect();
-            if parts.len() == 2 {
-                let start: usize = parts[0].parse().unwrap_or(0);
-                let end: usize = if parts[1].is_empty() {
-                    total - 1
-                } else {
-                    parts[1].parse().unwrap_or(total - 1).min(total - 1)
-                };
-                if start <= end && start < total {
-                    let slice = data[start..=end].to_vec();
-                    return Ok((
-                        StatusCode::PARTIAL_CONTENT,
-                        [
-                            (header::CONTENT_TYPE, mime),
-                            (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", safe_filename)),
-                            (header::ACCEPT_RANGES, "bytes".to_string()),
-                            (header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, total)),
-                            (header::CONTENT_LENGTH, slice.len().to_string()),
-                        ],
-                        slice,
-                    ));
+    if total > 0 {
+        if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
+            if let Some(range) = range_val.strip_prefix("bytes=") {
+                let parts: Vec<&str> = range.splitn(2, '-').collect();
+                if parts.len() == 2 {
+                    let start: usize = parts[0].parse().unwrap_or(0);
+                    let end: usize = if parts[1].is_empty() {
+                        total - 1
+                    } else {
+                        parts[1].parse().unwrap_or(total - 1).min(total - 1)
+                    };
+                    if start <= end && start < total {
+                        let slice = data[start..=end].to_vec();
+                        return Ok((
+                            StatusCode::PARTIAL_CONTENT,
+                            [
+                                (header::CONTENT_TYPE, mime),
+                                (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", safe_filename)),
+                                (header::ACCEPT_RANGES, "bytes".to_string()),
+                                (header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, total)),
+                                (header::CONTENT_LENGTH, slice.len().to_string()),
+                            ],
+                            slice,
+                        ));
+                    }
                 }
             }
         }

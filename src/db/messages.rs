@@ -33,27 +33,27 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
 
-        let mut stmt = conn
-            .prepare(
+        let mut stmt = match conn.prepare(
                 "SELECT id, author, content, timestamp, expires_at, attachments, edited_at, encrypted FROM messages
                  WHERE channel = ?1
                    AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY timestamp DESC LIMIT ?3",
-            )
-            .unwrap();
+            ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::messages] get_history prepare failed: {e}"); return Vec::new(); }
+        };
 
-        let rows = stmt
-            .query_map(params![channel, now, limit], |row| {
+        let rows: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>, bool)> = match stmt.query_map(params![channel, now, limit], |row| {
                 let ts_str: String = row.get(3)?;
                 let exp_str: Option<String> = row.get(4)?;
                 let att_str: Option<String> = row.get(5)?;
                 let edited_str: Option<String> = row.get(6)?;
                 let encrypted: bool = row.get::<_, i32>(7).unwrap_or(0) != 0;
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, ts_str, exp_str, att_str, edited_str, encrypted))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect::<Vec<_>>();
+            }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::messages] get_history query failed: {e}"); return Vec::new(); }
+        };
 
         let mut messages: Vec<HistoryMessage> = rows.into_iter().map(|(id, author, content, ts_str, exp_str, att_str, edited_str, encrypted)| {
             let attachments = att_str

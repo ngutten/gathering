@@ -82,14 +82,9 @@ impl Db {
 
     pub fn increment_channel_key_version(&self, channel: &str) -> i32 {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        if let Err(e) = conn.execute(
-            "UPDATE channel_encryption SET key_version = key_version + 1 WHERE channel = ?1",
-            params![channel],
-        ) {
-            eprintln!("[db::encryption] increment_channel_key_version update failed: {e}");
-        }
+        // Atomic increment + return using RETURNING clause
         conn.query_row(
-            "SELECT key_version FROM channel_encryption WHERE channel = ?1",
+            "UPDATE channel_encryption SET key_version = key_version + 1 WHERE channel = ?1 RETURNING key_version",
             params![channel],
             |row| row.get::<_, i32>(0),
         ).unwrap_or(1)

@@ -28,14 +28,21 @@ impl Db {
     pub fn get_voice_channels_pending_expiry(&self) -> Vec<(String, i64)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT channel, default_ttl_secs FROM voice_channel_ttl
              WHERE empty_since IS NOT NULL
              AND datetime(empty_since, '+' || default_ttl_secs || ' seconds') <= ?1"
-        ).unwrap();
-        stmt.query_map(params![now], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::voice] get_voice_channels_pending_expiry prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![now], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::voice] get_voice_channels_pending_expiry query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn expire_voice_channel_messages(&self, channel: &str) -> usize {

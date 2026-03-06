@@ -40,11 +40,14 @@ impl Db {
 
     pub fn list_user_files(&self, username: &str) -> Vec<UserFileInfo> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT id, filename, size, mime_type, channel, created_at, pinned, encrypted FROM files
              WHERE uploader = ?1 ORDER BY created_at DESC"
-        ).unwrap();
-        stmt.query_map(params![username], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::files] list_user_files prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![username], |row| {
             Ok(UserFileInfo {
                 id: row.get(0)?,
                 filename: row.get(1)?,
@@ -55,7 +58,11 @@ impl Db {
                 pinned: row.get::<_, i32>(6).unwrap_or(0) != 0,
                 encrypted: row.get::<_, i32>(7).unwrap_or(0) != 0,
             })
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::files] list_user_files query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn set_file_pinned(&self, file_id: &str, pinned: bool) -> Result<(), String> {
@@ -94,11 +101,18 @@ impl Db {
 
     pub fn get_released_files_for_user(&self, username: &str) -> Vec<(String, String, i64)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT id, filename, size FROM files WHERE uploader = ?1 AND pinned = 0 ORDER BY created_at ASC"
-        ).unwrap();
-        stmt.query_map(params![username], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::files] get_released_files_for_user prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![username], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::files] get_released_files_for_user query failed: {e}"); Vec::new() }
+        };
+        result
     }
 }

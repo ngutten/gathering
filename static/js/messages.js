@@ -2,7 +2,7 @@
 
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
-import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, triggerKeyRotation, renderKeyRequests } from './crypto.js';
+import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests } from './crypto.js';
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
@@ -80,10 +80,6 @@ export function handleServerMsg(msg) {
       clearUserPresence(msg.channel, msg.username);
       state.pendingKeyRequests = state.pendingKeyRequests.filter(r => !(r.channel === msg.channel && r.user === msg.username));
       renderKeyRequests();
-      if (state.encryptedChannels.has(msg.channel) && state.channelKeys[msg.channel] && state.e2eReady && state.publicKeyCache[msg.username]) {
-        delete state.publicKeyCache[msg.username];
-        triggerKeyRotation(msg.channel, msg.username);
-      }
       break;
 
     case 'UserTyping':
@@ -341,7 +337,9 @@ export function handleServerMsg(msg) {
       break;
 
     case 'ChannelKeyRotated':
-      send('RequestChannelKey', { channel: msg.channel });
+      if (state.e2eReady) {
+        send('RequestChannelKey', { channel: msg.channel });
+      }
       break;
 
     // ── Direct Messages ──
@@ -349,6 +347,11 @@ export function handleServerMsg(msg) {
       state.dmChannels[msg.channel] = msg.other_user;
       state.encryptedChannels.add(msg.channel);
       renderDMList();
+      if (!state.e2eReady) {
+        switchChannel(msg.channel);
+        appendSystem('This is an encrypted DM. Generate or import an E2E key (bottom of sidebar) to participate.');
+        break;
+      }
       if (msg.initiated && state.e2eReady && !state.channelKeys[msg.channel]) {
         const chKey = generateChannelKey();
         state.channelKeys[msg.channel] = chKey;

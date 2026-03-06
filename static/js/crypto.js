@@ -10,7 +10,7 @@ export async function initE2E() {
     await new Promise(r => setTimeout(r, 100));
   }
   await sodium.ready;
-  // Load or generate X25519 keypair
+  // Load existing X25519 keypair — do NOT auto-generate
   const storedSk = localStorage.getItem('gathering_e2e_sk');
   const storedPk = localStorage.getItem('gathering_e2e_pk');
   if (storedSk && storedPk) {
@@ -18,18 +18,26 @@ export async function initE2E() {
       privateKey: sodium.from_base64(storedSk),
       publicKey: sodium.from_base64(storedPk),
     };
-  } else {
-    const kp = sodium.crypto_box_keypair();
-    state.myKeyPair = { publicKey: kp.publicKey, privateKey: kp.privateKey };
-    localStorage.setItem('gathering_e2e_sk', sodium.to_base64(kp.privateKey));
-    localStorage.setItem('gathering_e2e_pk', sodium.to_base64(kp.publicKey));
-    if (!localStorage.getItem('gathering_e2e_warned')) {
-      localStorage.setItem('gathering_e2e_warned', '1');
-      setTimeout(() => emit('system-message', 'E2E keypair generated. Export your key from the sidebar to back it up. If lost, encrypted history cannot be recovered.'), 500);
-    }
+    state.e2eReady = true;
+    send('UploadPublicKey', { public_key: sodium.to_base64(state.myKeyPair.publicKey) });
   }
+  // If no key exists, user must explicitly generate or import one
+  updateKeyUI();
+}
+
+/** Generate a new E2E keypair. Returns false if one already exists (caller should confirm overwrite). */
+export function generateE2EKey(force) {
+  if (state.myKeyPair && !force) return false;
+  const kp = sodium.crypto_box_keypair();
+  state.myKeyPair = { publicKey: kp.publicKey, privateKey: kp.privateKey };
+  localStorage.setItem('gathering_e2e_sk', sodium.to_base64(kp.privateKey));
+  localStorage.setItem('gathering_e2e_pk', sodium.to_base64(kp.publicKey));
   state.e2eReady = true;
-  send('UploadPublicKey', { public_key: sodium.to_base64(state.myKeyPair.publicKey) });
+  state.channelKeys = {};
+  send('UploadPublicKey', { public_key: sodium.to_base64(kp.publicKey) });
+  updateKeyUI();
+  emit('system-message', 'E2E keypair generated. Export your key from the sidebar to back it up. If lost, encrypted history cannot be recovered.');
+  return true;
 }
 
 export function generateChannelKey() {
@@ -129,6 +137,7 @@ export function importPrivateKey() {
       const sk = sodium.from_base64(data.sk);
       const pk = sodium.from_base64(data.pk);
       state.myKeyPair = { privateKey: sk, publicKey: pk };
+      state.e2eReady = true;
       localStorage.setItem('gathering_e2e_sk', data.sk);
       localStorage.setItem('gathering_e2e_pk', data.pk);
       send('UploadPublicKey', { public_key: data.pk });
@@ -144,7 +153,30 @@ export function importPrivateKey() {
 
 export function updateKeyUI() {
   const fp = document.getElementById('key-fingerprint');
-  if (fp) fp.textContent = getKeyFingerprint();
+  const noKeyLabel = document.getElementById('no-key-label');
+  const hasKeySection = document.getElementById('e2e-has-key');
+  const noKeySection = document.getElementById('e2e-no-key');
+  const hasKey = !!state.myKeyPair;
+  if (fp) fp.textContent = hasKey ? getKeyFingerprint() : '';
+  if (noKeyLabel) noKeyLabel.style.display = hasKey ? 'none' : '';
+  if (hasKeySection) hasKeySection.style.display = hasKey ? '' : 'none';
+  if (noKeySection) noKeySection.style.display = hasKey ? 'none' : '';
+  // Update channel list styling for encrypted channels
+  renderEncryptedChannelStates();
+}
+
+/** Re-render channel/DM lists to pick up no-e2e-key styling changes */
+function renderEncryptedChannelStates() {
+  // The renderChannels/renderDMList functions in chat-ui.js apply the class,
+  // so we just need to trigger a re-render if those elements exist.
+  // Avoid circular import — directly toggle classes on existing elements.
+  document.querySelectorAll('.channel-item, .dm-item').forEach(el => {
+    const onclick = el.getAttribute('onclick') || '';
+    const match = onclick.match(/switchChannel\('([^']+)'\)/);
+    if (match && state.encryptedChannels.has(match[1])) {
+      el.classList.toggle('no-e2e-key', !state.e2eReady);
+    }
+  });
 }
 
 // Deny cooldown: suppress repeated key requests from the same user+channel
@@ -261,14 +293,16 @@ export function decryptFile(uint8Array, channelKey) {
   }
 }
 
-export async function triggerKeyRotation(channel, excludeUser) {
+/** Manual re-key: generates a new channel key and distributes to all cached members.
+ *  WARNING: old messages become unreadable. Callers must confirm with the user first. */
+export async function rekeyChannel(channel) {
   if (!state.e2eReady || !state.channelKeys[channel]) return;
   const newKey = generateChannelKey();
   state.channelKeys[channel] = newKey;
   const newKeys = {};
   newKeys[state.currentUser] = encryptChannelKeyForUser(newKey, sodium.to_base64(state.myKeyPair.publicKey));
   for (const [user, pk] of Object.entries(state.publicKeyCache)) {
-    if (user !== excludeUser && user !== state.currentUser) {
+    if (user !== state.currentUser) {
       newKeys[user] = encryptChannelKeyForUser(newKey, pk);
     }
   }

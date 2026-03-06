@@ -33,8 +33,11 @@ impl Db {
 
     pub fn list_roles(&self) -> Vec<RoleInfo> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare("SELECT name, permissions, disk_quota_mb FROM roles ORDER BY name").unwrap();
-        stmt.query_map([], |row| {
+        let mut stmt = match conn.prepare("SELECT name, permissions, disk_quota_mb FROM roles ORDER BY name") {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::roles] list_roles prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map([], |row| {
             let perms_json: String = row.get(1)?;
             let permissions: Vec<String> = serde_json::from_str(&perms_json).unwrap_or_default();
             Ok(RoleInfo {
@@ -42,7 +45,11 @@ impl Db {
                 permissions,
                 disk_quota_mb: row.get::<_, i64>(2).unwrap_or(0),
             })
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::roles] list_roles query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn backfill_user_roles(&self) {
@@ -77,27 +84,34 @@ impl Db {
 
     pub fn get_user_roles(&self, username: &str) -> Vec<String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT role_name FROM user_roles WHERE username = ?1 ORDER BY role_name"
-        ).unwrap();
-        stmt.query_map(params![username], |row| row.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::roles] get_user_roles prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![username], |row| row.get(0)) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::roles] get_user_roles query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn get_user_permissions(&self, username: &str) -> Vec<String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT r.permissions FROM roles r
              INNER JOIN user_roles ur ON ur.role_name = r.name
              WHERE ur.username = ?1"
-        ).unwrap();
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::roles] get_user_permissions prepare failed: {e}"); return Vec::new(); }
+        };
         let mut all_perms: Vec<String> = Vec::new();
-        let rows: Vec<String> = stmt.query_map(params![username], |row| row.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
+        let rows: Vec<String> = match stmt.query_map(params![username], |row| row.get(0)) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::roles] get_user_permissions query failed: {e}"); return Vec::new() }
+        };
         for perms_json in rows {
             if let Ok(perms) = serde_json::from_str::<Vec<String>>(&perms_json) {
                 all_perms.extend(perms);

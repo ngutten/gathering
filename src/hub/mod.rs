@@ -178,6 +178,18 @@ impl Hub {
 
     /// Handle an incoming message from an authenticated client
     pub async fn handle_message(&self, id: usize, msg: ClientMsg) {
+        // Auth messages are always allowed (that's how clients authenticate)
+        // All other messages require authentication
+        if !matches!(msg, ClientMsg::Auth { .. }) {
+            let clients = self.clients.lock().await;
+            let is_authed = clients.get(&id).map_or(false, |c| !c.username.is_empty());
+            drop(clients);
+            if !is_authed {
+                self.send_error(id, "Not authenticated").await;
+                return;
+            }
+        }
+
         match msg {
             ClientMsg::Auth { token } => {
                 let result = self.authenticate(id, &token).await;

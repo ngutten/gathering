@@ -408,6 +408,8 @@
                   text-align: center; display: inline-block; line-height: 1.2; }
   .channel-right { display: flex; align-items: center; gap: 0.3rem; }
   .channel-item.has-unread span:first-child, .dm-item.has-unread .dm-name { font-weight: 700; color: var(--text); }
+  .channel-item.no-e2e-key, .dm-item.no-e2e-key { opacity: 0.45; }
+  .channel-item.no-e2e-key span:first-child, .dm-item.no-e2e-key .dm-name { color: var(--red); }
 
   /* ── File manager ─── */
   .files-btn { width: calc(100% - 2rem); margin: 0.3rem 1rem; padding: 0.35rem 0.6rem;

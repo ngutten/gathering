@@ -25,10 +25,13 @@ impl Db {
 
     pub fn list_user_dms(&self, username: &str) -> Vec<DMInfo> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT channel FROM dm_members WHERE username = ?1"
-        ).unwrap();
-        stmt.query_map(params![username], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::dms] list_user_dms prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![username], |row| {
             let channel: String = row.get(0)?;
             let parts: Vec<&str> = channel.splitn(3, ':').collect();
             let other_user = if parts.len() == 3 {
@@ -41,6 +44,10 @@ impl Db {
                 other_user,
                 encrypted: true,
             })
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::dms] list_user_dms query failed: {e}"); Vec::new() }
+        };
+        result
     }
 }

@@ -6,11 +6,17 @@ use super::Db;
 impl Db {
     pub fn get_settings(&self) -> HashMap<String, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare("SELECT key, value FROM settings").unwrap();
+        let mut stmt = match conn.prepare("SELECT key, value FROM settings") {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::settings] get_settings prepare failed: {e}"); return HashMap::new(); }
+        };
         let mut map = HashMap::new();
-        let rows: Vec<(String, String)> = stmt.query_map([], |row| {
+        let rows: Vec<(String, String)> = match stmt.query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?))
-        }).unwrap().filter_map(|r| r.ok()).collect();
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::settings] get_settings query failed: {e}"); return HashMap::new(); }
+        };
         for (k, v) in rows {
             map.insert(k, v);
         }

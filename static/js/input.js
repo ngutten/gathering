@@ -4,6 +4,7 @@ import state, { isDMChannel } from './state.js';
 import { send, apiFetch } from './transport.js';
 import { encryptFile, encryptChannelKeyForUser, generateChannelKey, tryEncrypt } from './crypto.js';
 import { escapeHtml, formatFileSize } from './render.js';
+import { appendSystem } from './chat-ui.js';
 
 const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_INPUT_HEIGHT_PX = 120;
@@ -180,6 +181,10 @@ export function joinChannel() {
   input.value = '';
   if (encCheck) encCheck.checked = false;
 
+  if (wantEncrypted && !state.e2eReady) {
+    appendSystem('Generate or import an E2E key before creating encrypted channels.');
+    return;
+  }
   if (wantEncrypted && state.e2eReady) {
     const chKey = generateChannelKey();
     state.channelKeys[name] = chKey;

@@ -23,7 +23,7 @@ impl Db {
     pub fn list_topics(&self, channel: &str, limit: u32) -> Vec<TopicSummary> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT t.id, t.channel, t.title, t.author, t.created_at, t.pinned,
                     COUNT(r.id) as reply_count,
                     COALESCE(MAX(r.created_at), t.created_at) as last_activity,
@@ -35,8 +35,11 @@ impl Db {
              GROUP BY t.id
              ORDER BY t.pinned DESC, last_activity DESC
              LIMIT ?3"
-        ).unwrap();
-        stmt.query_map(params![channel, now, limit], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::topics] list_topics prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![channel, now, limit], |row| {
             Ok(TopicSummary {
                 id: row.get(0)?,
                 channel: row.get(1)?,
@@ -49,7 +52,11 @@ impl Db {
                 expires_at: row.get(8)?,
                 encrypted: row.get::<_, i32>(9).unwrap_or(0) != 0,
             })
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::topics] list_topics query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn get_topic(&self, topic_id: &str) -> Option<TopicDetailData> {
@@ -83,13 +90,16 @@ impl Db {
     pub fn get_topic_replies(&self, topic_id: &str, limit: u32) -> Vec<TopicReplyData> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
-        let mut stmt = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT id, topic_id, author, content, created_at, expires_at, attachments, edited_at, encrypted FROM topic_replies
              WHERE topic_id = ?1
                AND (expires_at IS NULL OR expires_at > ?2)
              ORDER BY created_at ASC LIMIT ?3"
-        ).unwrap();
-        stmt.query_map(params![topic_id, now, limit], |row| {
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::topics] get_topic_replies prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map(params![topic_id, now, limit], |row| {
             let att_str: Option<String> = row.get(6)?;
             let attachments = att_str
                 .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
@@ -106,7 +116,11 @@ impl Db {
                 edited_at: row.get(7)?,
                 encrypted: row.get::<_, i32>(8).unwrap_or(0) != 0,
             })
-        }).unwrap().filter_map(|r| r.ok()).collect()
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::topics] get_topic_replies query failed: {e}"); Vec::new() }
+        };
+        result
     }
 
     pub fn create_topic_reply(

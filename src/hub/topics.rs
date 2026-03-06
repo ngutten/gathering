@@ -88,6 +88,19 @@ impl Hub {
     }
 
     pub(super) async fn handle_list_topics(&self, id: usize, channel: String, limit: Option<u32>) {
+        // Check channel access
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+        if !self.db.can_access_channel(&channel, &username) {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted"));
+            }
+            return;
+        }
+        drop(clients);
         let topics = self.db.list_topics(&channel, limit.unwrap_or(DEFAULT_TOPIC_LIST_LIMIT).min(MAX_TOPIC_LIST_LIMIT));
         self.send_msg(id, &ServerMsg::TopicList { channel, topics }).await;
     }
@@ -95,9 +108,18 @@ impl Hub {
     pub(super) async fn handle_get_topic(&self, id: usize, topic_id: String) {
         let topic = self.db.get_topic(&topic_id);
         let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
         if let Some(client) = clients.get(&id) {
             match topic {
                 Some(t) => {
+                    // Check channel access for the topic's channel
+                    if !self.db.can_access_channel(&t.channel, &username) {
+                        let _ = Self::send_to(&client.tx, &ServerMsg::error("Access denied: channel is restricted"));
+                        return;
+                    }
                     let replies = self.db.get_topic_replies(&topic_id, MAX_TOPIC_REPLIES);
                     if let Err(e) = Self::send_to(&client.tx, &ServerMsg::TopicDetail { topic: t, replies }) {
                         eprintln!("[hub::topics] send topic detail failed: {e:?}");
@@ -126,6 +148,16 @@ impl Hub {
             Some(c) if !c.username.is_empty() => c.username.clone(),
             _ => return,
         };
+
+        // Check channel access via topic's channel
+        if let Some(topic) = self.db.get_topic(&topic_id) {
+            if !clients.get(&id).map_or(false, |c| c.channels.contains(&topic.channel)) {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                }
+                return;
+            }
+        }
 
         let reply_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
@@ -176,6 +208,16 @@ impl Hub {
             Some(c) if !c.username.is_empty() => c.username.clone(),
             _ => return,
         };
+
+        // Check channel membership via topic's channel
+        if let Some(topic) = self.db.get_topic(&topic_id) {
+            if !clients.get(&id).map_or(false, |c| c.channels.contains(&topic.channel)) {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
+                }
+                return;
+            }
+        }
 
         // Check pin_topic permission
         if !self.db.user_has_permission(&username, "pin_topic") {

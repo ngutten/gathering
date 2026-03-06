@@ -10,13 +10,16 @@ impl Db {
         let now = Utc::now().to_rfc3339();
         let pattern = format!("%{}%", query);
         if let Some(ch) = channel {
-            let mut stmt = conn.prepare(
+            let mut stmt = match conn.prepare(
                 "SELECT id, channel, author, content, timestamp FROM messages
                  WHERE channel = ?1 AND content LIKE ?2 AND encrypted = 0
                    AND (expires_at IS NULL OR expires_at > ?3)
                  ORDER BY timestamp DESC LIMIT ?4"
-            ).unwrap();
-            stmt.query_map(params![ch, pattern, now, limit], |row| {
+            ) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[db::search] search_messages prepare failed: {e}"); return Vec::new(); }
+            };
+            let result = match stmt.query_map(params![ch, pattern, now, limit], |row| {
                 Ok(SearchResult {
                     id: row.get(0)?,
                     channel: row.get(1)?,
@@ -24,15 +27,22 @@ impl Db {
                     content: row.get(3)?,
                     timestamp: row.get(4)?,
                 })
-            }).unwrap().filter_map(|r| r.ok()).collect()
+            }) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(e) => { eprintln!("[db::search] search_messages query failed: {e}"); Vec::new() }
+            };
+            result
         } else {
-            let mut stmt = conn.prepare(
+            let mut stmt = match conn.prepare(
                 "SELECT id, channel, author, content, timestamp FROM messages
                  WHERE content LIKE ?1 AND encrypted = 0
                    AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY timestamp DESC LIMIT ?3"
-            ).unwrap();
-            stmt.query_map(params![pattern, now, limit], |row| {
+            ) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[db::search] search_messages prepare failed: {e}"); return Vec::new(); }
+            };
+            let result = match stmt.query_map(params![pattern, now, limit], |row| {
                 Ok(SearchResult {
                     id: row.get(0)?,
                     channel: row.get(1)?,
@@ -40,7 +50,11 @@ impl Db {
                     content: row.get(3)?,
                     timestamp: row.get(4)?,
                 })
-            }).unwrap().filter_map(|r| r.ok()).collect()
+            }) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(e) => { eprintln!("[db::search] search_messages query failed: {e}"); Vec::new() }
+            };
+            result
         }
     }
 }
