@@ -17,7 +17,7 @@ mod voice;
 mod widget_state;
 
 use rusqlite::{Connection, params};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::protocol::FileInfo;
@@ -252,6 +252,23 @@ impl Db {
         )?;
 
         Ok(Db { conn: Mutex::new(conn) })
+    }
+
+    /// Create a backup of the database to the given directory.
+    /// Returns the path to the backup file.
+    pub fn backup(&self, backup_dir: &Path) -> Result<PathBuf, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let backup_name = format!("gathering_backup_{}.db", timestamp);
+        let backup_path = backup_dir.join(&backup_name);
+
+        let mut dst = Connection::open(&backup_path).map_err(|e| format!("Failed to create backup file: {}", e))?;
+        let backup = rusqlite::backup::Backup::new(&conn, &mut dst)
+            .map_err(|e| format!("Failed to init backup: {}", e))?;
+        backup.step(-1)
+            .map_err(|e| format!("Backup failed: {}", e))?;
+
+        Ok(backup_path)
     }
 
     fn get_file_inner(&self, conn: &Connection, id: &str) -> Option<FileInfo> {

@@ -2,7 +2,7 @@
 
 ## Reliability & Operations
 - [x] Automated tests (90 tests: 64 DB-layer, 26 hub integration — see tests/)
-- [ ] Database backup endpoint or scheduled job (SQLite `.backup`)
+- [x] Database backup endpoint (POST /api/backup, admin-only, SQLite `.backup`)
 - [ ] Graceful shutdown (drain WebSocket connections and DB writes on SIGTERM)
 
 ## User-Facing Features

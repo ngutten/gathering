@@ -175,6 +175,7 @@ async fn main() {
         .route("/api/server-info", get(handle_server_info))
         .route("/api/upload", post(handle_upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)))
         .route("/api/files/:id", get(handle_download))
+        .route("/api/backup", post(handle_backup))
         .route("/api/music", get(handle_music_list))
         .route("/api/music/*path", get(handle_music_download))
         .route("/ws", get(ws_upgrade))
@@ -382,6 +383,53 @@ async fn handle_logout(
     }
 
     StatusCode::OK
+}
+
+// ── Database backup ─────────────────────────────────────────────────
+
+async fn handle_backup(
+    Extension(state): Extension<Arc<AppState>>,
+    headers: http::HeaderMap,
+) -> impl IntoResponse {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    let username = match state.db.validate_token(token) {
+        Some(u) => u,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    if !state.db.user_has_permission(&username, "manage_settings") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let backup_dir = state.data_dir.join("backups");
+    std::fs::create_dir_all(&backup_dir).ok();
+
+    let backup_path = state.db.backup(&backup_dir).map_err(|e| {
+        tracing::error!("Backup failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let data = tokio::fs::read(&backup_path).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let filename = backup_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("backup.db");
+
+    tracing::info!("Database backup created by {}: {}", username, filename);
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/x-sqlite3".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", filename)),
+            (header::CONTENT_LENGTH, data.len().to_string()),
+        ],
+        data,
+    ))
 }
 
 // ── File upload ─────────────────────────────────────────────────────
