@@ -55,14 +55,9 @@ For production, either:
 1. Place `cert.pem` and `key.pem` in the data directory
 2. Use a reverse proxy (nginx, caddy) for TLS termination — recommended
 
-## Roadmap
+## Architecture
 
-See [PLAN.md](PLAN.md) for the full development roadmap:
-- Phase 2: Voice channels (WebRTC)
-- Phase 3: File sharing, markdown/LaTeX rendering
-- Phase 4: Forum-style async topics
-- Phase 5: End-to-end encryption
-- Phase 2b: Native desktop client via Tauri
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase walkthrough, including the widget development guide.
 
 ## Building from source
 
