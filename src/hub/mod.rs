@@ -409,6 +409,12 @@ impl Hub {
                 self.handle_rotate_channel_key(id, channel, new_keys).await;
             }
 
+            ClientMsg::SetKeyBackup { encrypted_key, salt, nonce, ops_limit, mem_limit } => {
+                self.handle_set_key_backup(id, encrypted_key, salt, nonce, ops_limit, mem_limit).await;
+            }
+            ClientMsg::GetKeyBackup => { self.handle_get_key_backup(id).await; }
+            ClientMsg::DeleteKeyBackup => { self.handle_delete_key_backup(id).await; }
+
             ClientMsg::SearchMessages { query, channel, from, date_start, date_end, mentions } => {
                 self.handle_search_messages(id, query, channel, from, date_start, date_end, mentions).await;
             }

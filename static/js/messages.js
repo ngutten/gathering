@@ -2,7 +2,7 @@
 
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
-import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64 } from './crypto.js';
+import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64, showRestorePrompt } from './crypto.js';
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
@@ -448,6 +448,25 @@ export function handleServerMsg(msg) {
       { const ch = state.channels.find(c => c.name === msg.channel);
         if (ch) ch.encrypted = true; }
       renderChannels();
+      break;
+
+    case 'KeyBackupStored':
+      appendSystem('Key backup stored on server.');
+      break;
+
+    case 'KeyBackupDeleted':
+      appendSystem('Key backup deleted from server.');
+      break;
+
+    case 'KeyBackupData':
+      state._pendingKeyBackup = { encrypted_key: msg.encrypted_key, salt: msg.salt, nonce: msg.nonce, ops_limit: msg.ops_limit, mem_limit: msg.mem_limit };
+      if (!state.myKeyPair) {
+        showRestorePrompt(state._pendingKeyBackup);
+      }
+      break;
+
+    case 'NoKeyBackup':
+      state._pendingKeyBackup = null;
       break;
 
     case 'ChannelKeyRotated':

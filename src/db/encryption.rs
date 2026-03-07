@@ -90,6 +90,34 @@ impl Db {
         ).unwrap_or(1)
     }
 
+    pub fn store_key_backup(&self, username: &str, encrypted_key: &str, salt: &str, nonce: &str, ops_limit: u32, mem_limit: u32) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = conn.execute(
+            "INSERT INTO key_backups(username, encrypted_key, salt, nonce, ops_limit, mem_limit, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+             ON CONFLICT(username) DO UPDATE SET encrypted_key = ?2, salt = ?3, nonce = ?4, ops_limit = ?5, mem_limit = ?6, updated_at = datetime('now')",
+            params![username, encrypted_key, salt, nonce, ops_limit, mem_limit],
+        ) {
+            eprintln!("[db::encryption] store_key_backup upsert failed: {e}");
+        }
+    }
+
+    pub fn get_key_backup(&self, username: &str) -> Option<(String, String, String, u32, u32)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT encrypted_key, salt, nonce, ops_limit, mem_limit FROM key_backups WHERE username = ?1",
+            params![username],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).ok()
+    }
+
+    pub fn delete_key_backup(&self, username: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = conn.execute("DELETE FROM key_backups WHERE username = ?1", params![username]) {
+            eprintln!("[db::encryption] delete_key_backup failed: {e}");
+        }
+    }
+
     pub fn get_channel_key_version(&self, channel: &str) -> i32 {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(

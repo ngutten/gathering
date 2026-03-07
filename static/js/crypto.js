@@ -75,7 +75,10 @@ export async function initE2E() {
     state.e2eReady = true;
     send('UploadPublicKey', { public_key: sodium.to_base64(state.myKeyPair.publicKey) });
   }
-  // If no key exists, user must explicitly generate or import one
+  // If no key exists, check for a server-side backup
+  if (!state.myKeyPair) {
+    send('GetKeyBackup', {});
+  }
   updateKeyUI();
 }
 
@@ -375,6 +378,170 @@ export function decryptFile(uint8Array, channelKey) {
   } catch (e) {
     return null;
   }
+}
+
+// ── E2E Key Sync (passphrase-based backup/restore) ───────────────────
+
+export function encryptKeyForBackup(passphrase) {
+  if (!state.myKeyPair) return;
+  const salt = sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES);
+  const opsLimit = sodium.crypto_pwhash_OPSLIMIT_MODERATE;
+  const memLimit = sodium.crypto_pwhash_MEMLIMIT_MODERATE;
+  const derivedKey = sodium.crypto_pwhash(
+    32, passphrase, salt, opsLimit, memLimit,
+    sodium.crypto_pwhash_ALG_ARGON2ID13
+  );
+  const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
+  const ciphertext = sodium.crypto_secretbox_easy(state.myKeyPair.privateKey, nonce, derivedKey);
+  send('SetKeyBackup', {
+    encrypted_key: sodium.to_base64(ciphertext),
+    salt: sodium.to_base64(salt),
+    nonce: sodium.to_base64(nonce),
+    ops_limit: opsLimit,
+    mem_limit: memLimit,
+  });
+}
+
+export function decryptKeyFromBackup(passphrase, backupData) {
+  try {
+    const salt = sodium.from_base64(backupData.salt);
+    const nonce = sodium.from_base64(backupData.nonce);
+    const ciphertext = sodium.from_base64(backupData.encrypted_key);
+    const derivedKey = sodium.crypto_pwhash(
+      32, passphrase, salt, backupData.ops_limit, backupData.mem_limit,
+      sodium.crypto_pwhash_ALG_ARGON2ID13
+    );
+    const privateKey = sodium.crypto_secretbox_open_easy(ciphertext, nonce, derivedKey);
+    if (!privateKey) return false;
+    const publicKey = sodium.crypto_scalarmult_base(privateKey);
+    state.myKeyPair = { privateKey, publicKey };
+    state.e2eReady = true;
+    const skB64 = sodium.to_base64(privateKey);
+    const pkB64 = sodium.to_base64(publicKey);
+    localStorage.setItem('gathering_e2e_sk', skB64);
+    localStorage.setItem('gathering_e2e_pk', pkB64);
+    send('UploadPublicKey', { public_key: pkB64 });
+    if (state.currentUser) {
+      unpinKey(state.currentUser);
+      pinPublicKey(state.currentUser, pkB64);
+    }
+    state.channelKeys = {};
+    updateKeyUI();
+    // Request channel keys for all encrypted channels
+    for (const ch of state.encryptedChannels) {
+      send('RequestChannelKey', { channel: ch });
+    }
+    emit('system-message', 'Key restored from backup successfully.');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function setupKeySync() {
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'key-sync-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1.5rem;max-width:400px;width:90%;color:var(--text);font-family:inherit;';
+
+  const hasBackup = !!state._pendingKeyBackup;
+  box.innerHTML = `
+    <h3 style="margin:0 0 0.5rem 0;font-size:1rem;">E2E Key Sync</h3>
+    <p style="font-size:0.8rem;color:var(--text2);margin:0 0 1rem 0;">
+      Encrypt your private key with a passphrase and store it on the server.
+      The server cannot decrypt it. Use this passphrase on another device to restore your identity.
+    </p>
+    <div style="margin-bottom:0.5rem;">
+      <label style="font-size:0.75rem;color:var(--text2);">Passphrase</label>
+      <input type="password" id="sync-passphrase" style="width:100%;padding:0.4rem;margin-top:0.2rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;box-sizing:border-box;" autocomplete="off" />
+    </div>
+    <div style="margin-bottom:1rem;">
+      <label style="font-size:0.75rem;color:var(--text2);">Confirm Passphrase</label>
+      <input type="password" id="sync-passphrase-confirm" style="width:100%;padding:0.4rem;margin-top:0.2rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;box-sizing:border-box;" autocomplete="off" />
+    </div>
+    <div id="sync-error" style="color:var(--red);font-size:0.75rem;margin-bottom:0.5rem;"></div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+      ${hasBackup ? '<button id="sync-delete-btn" style="padding:0.3rem 0.8rem;background:var(--red);color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.8rem;">Delete Backup</button>' : ''}
+      <button id="sync-cancel-btn" style="padding:0.3rem 0.8rem;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.8rem;">Cancel</button>
+      <button id="sync-save-btn" style="padding:0.3rem 0.8rem;background:var(--green);color:#000;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.8rem;">${hasBackup ? 'Update Backup' : 'Save Backup'}</button>
+    </div>
+  `;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('sync-cancel-btn').addEventListener('click', () => overlay.remove());
+
+  if (hasBackup) {
+    document.getElementById('sync-delete-btn').addEventListener('click', () => {
+      send('DeleteKeyBackup', {});
+      state._pendingKeyBackup = null;
+      overlay.remove();
+    });
+  }
+
+  document.getElementById('sync-save-btn').addEventListener('click', () => {
+    const pass = document.getElementById('sync-passphrase').value;
+    const confirm = document.getElementById('sync-passphrase-confirm').value;
+    const errEl = document.getElementById('sync-error');
+    if (!pass || pass.length < 8) {
+      errEl.textContent = 'Passphrase must be at least 8 characters.';
+      return;
+    }
+    if (pass !== confirm) {
+      errEl.textContent = 'Passphrases do not match.';
+      return;
+    }
+    encryptKeyForBackup(pass);
+    overlay.remove();
+  });
+}
+
+export function showRestorePrompt(backupData) {
+  const overlay = document.createElement('div');
+  overlay.id = 'key-restore-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1.5rem;max-width:400px;width:90%;color:var(--text);font-family:inherit;';
+  box.innerHTML = `
+    <h3 style="margin:0 0 0.5rem 0;font-size:1rem;">Restore E2E Key</h3>
+    <p style="font-size:0.8rem;color:var(--text2);margin:0 0 1rem 0;">
+      A key backup exists on the server. Enter your passphrase to restore your identity on this device.
+    </p>
+    <div style="margin-bottom:1rem;">
+      <label style="font-size:0.75rem;color:var(--text2);">Passphrase</label>
+      <input type="password" id="restore-passphrase" style="width:100%;padding:0.4rem;margin-top:0.2rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;box-sizing:border-box;" autocomplete="off" />
+    </div>
+    <div id="restore-error" style="color:var(--red);font-size:0.75rem;margin-bottom:0.5rem;"></div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+      <button id="restore-skip-btn" style="padding:0.3rem 0.8rem;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.8rem;">Skip</button>
+      <button id="restore-btn" style="padding:0.3rem 0.8rem;background:var(--green);color:#000;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.8rem;">Restore</button>
+    </div>
+  `;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  document.getElementById('restore-skip-btn').addEventListener('click', () => overlay.remove());
+  document.getElementById('restore-btn').addEventListener('click', () => {
+    const pass = document.getElementById('restore-passphrase').value;
+    const errEl = document.getElementById('restore-error');
+    if (!pass) {
+      errEl.textContent = 'Enter your passphrase.';
+      return;
+    }
+    errEl.textContent = 'Decrypting (this may take a moment)...';
+    // Use setTimeout to allow the UI to update before the CPU-intensive Argon2
+    setTimeout(() => {
+      const ok = decryptKeyFromBackup(pass, backupData);
+      if (ok) {
+        overlay.remove();
+      } else {
+        errEl.textContent = 'Wrong passphrase or corrupted backup.';
+      }
+    }, 50);
+  });
 }
 
 /** Manual re-key: generates a new channel key and distributes to all cached members.

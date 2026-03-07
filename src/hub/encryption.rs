@@ -120,6 +120,65 @@ impl Hub {
         }
     }
 
+    pub(super) async fn handle_set_key_backup(&self, id: usize, encrypted_key: String, salt: String, nonce: String, ops_limit: u32, mem_limit: u32) {
+        // Validate sizes
+        if encrypted_key.len() > 1024 || salt.len() > 1024 || nonce.len() > 1024 {
+            self.send_error(id, "Key backup field too large").await;
+            return;
+        }
+        if ops_limit < 1 || ops_limit > 20 {
+            self.send_error(id, "ops_limit out of range (1-20)").await;
+            return;
+        }
+        if mem_limit < 8_388_608 || mem_limit > 1_073_741_824 {
+            self.send_error(id, "mem_limit out of range (8MB-1GB)").await;
+            return;
+        }
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+        self.db.store_key_backup(&username, &encrypted_key, &salt, &nonce, ops_limit, mem_limit);
+        if let Some(client) = clients.get(&id) {
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::KeyBackupStored) {
+                eprintln!("[hub::encryption] send key backup stored failed: {e:?}");
+            }
+        }
+    }
+
+    pub(super) async fn handle_get_key_backup(&self, id: usize) {
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+        let msg = if let Some((encrypted_key, salt, nonce, ops_limit, mem_limit)) = self.db.get_key_backup(&username) {
+            ServerMsg::KeyBackupData { encrypted_key, salt, nonce, ops_limit, mem_limit }
+        } else {
+            ServerMsg::NoKeyBackup
+        };
+        if let Some(client) = clients.get(&id) {
+            if let Err(e) = Self::send_to(&client.tx, &msg) {
+                eprintln!("[hub::encryption] send key backup data failed: {e:?}");
+            }
+        }
+    }
+
+    pub(super) async fn handle_delete_key_backup(&self, id: usize) {
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+        self.db.delete_key_backup(&username);
+        if let Some(client) = clients.get(&id) {
+            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::KeyBackupDeleted) {
+                eprintln!("[hub::encryption] send key backup deleted failed: {e:?}");
+            }
+        }
+    }
+
     pub(super) async fn handle_rotate_channel_key(&self, id: usize, channel: String, new_keys: std::collections::HashMap<String, String>) {
         if new_keys.len() > MAX_ROTATE_KEYS || new_keys.values().any(|k| k.len() > MAX_KEY_LEN) {
             self.send_error(id, "Key rotation payload too large").await;

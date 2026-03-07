@@ -143,6 +143,11 @@ pub enum ClientMsg {
     ProvideChannelKey { channel: String, target_user: String, encrypted_key: String },
     RotateChannelKey { channel: String, new_keys: HashMap<String, String> },
 
+    // ── E2E Key Backup ──
+    SetKeyBackup { encrypted_key: String, salt: String, nonce: String, ops_limit: u32, mem_limit: u32 },
+    GetKeyBackup,
+    DeleteKeyBackup,
+
     // ── Preferences ──
     GetPreferences,
     SetPreference { key: String, value: String },
@@ -289,6 +294,12 @@ pub enum ServerMsg {
     ChannelKeyRequest { channel: String, requesting_user: String, public_key: String },
     ChannelEncrypted { channel: String },
     ChannelKeyRotated { channel: String, key_version: i32 },
+
+    // ── E2E Key Backup ──
+    KeyBackupData { encrypted_key: String, salt: String, nonce: String, ops_limit: u32, mem_limit: u32 },
+    KeyBackupStored,
+    KeyBackupDeleted,
+    NoKeyBackup,
 
     // ── Preferences ──
     Preferences { prefs: HashMap<String, String> },

@@ -253,6 +253,18 @@ impl Db {
         )?;
 
         conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS key_backups (
+                username TEXT PRIMARY KEY REFERENCES users(username),
+                encrypted_key TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                nonce TEXT NOT NULL,
+                ops_limit INTEGER NOT NULL,
+                mem_limit INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );"
+        )?;
+
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS user_profiles (
                 username TEXT PRIMARY KEY REFERENCES users(username),
                 avatar_id TEXT,
