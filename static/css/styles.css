@@ -5,7 +5,8 @@
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-         background: var(--bg); color: var(--text); height: 100vh; display: flex; }
+         background: var(--bg); color: var(--text); height: 100vh; height: 100dvh;
+         display: flex; overflow: hidden; }
 
   /* ── Auth screen ─── */
   #auth-screen { display: flex; align-items: center; justify-content: center;
@@ -812,3 +813,108 @@
               font-family: inherit; }
   .ctx-item:hover { background: var(--bg3); color: var(--accent); }
   .ctx-danger:hover { color: var(--red); }
+
+  /* ── Mobile hamburger button (hidden on desktop) ─── */
+  .sidebar-toggle { display: none; background: none; border: none; color: var(--text);
+                    font-size: 1.2rem; cursor: pointer; padding: 0.2rem 0.4rem; line-height: 1;
+                    flex-shrink: 0; }
+  .sidebar-toggle:hover { color: var(--accent); }
+
+  /* ── Sidebar backdrop (hidden on desktop) ─── */
+  .sidebar-backdrop { display: none; }
+
+  /* ── Mobile responsive ─── */
+  @media (max-width: 768px) {
+    /* Sidebar: off-screen overlay */
+    .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 200;
+               transform: translateX(-100%); transition: transform 0.2s ease; }
+    .sidebar.open { transform: translateX(0); }
+
+    /* Dark backdrop behind sidebar */
+    .sidebar-backdrop { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                        background: rgba(0,0,0,0.5); z-index: 199; }
+    .sidebar-backdrop.open { display: block; }
+
+    /* Show hamburger */
+    .sidebar-toggle { display: block; }
+
+    /* Layout: full width for chat */
+    .layout { flex-direction: column; }
+
+    /* Chat screen: fill viewport, no overflow */
+    #chat-screen { height: 100vh; height: 100dvh; }
+
+    /* Chat main: fill remaining space with flex */
+    .chat-main { height: 100vh; height: 100dvh; }
+
+    /* Chat header: wrap gracefully */
+    .chat-header { flex-wrap: wrap; padding: 0.5rem 0.7rem; gap: 0.3rem; }
+    .chat-header h2 { font-size: 0.85rem; white-space: nowrap; overflow: hidden;
+                       text-overflow: ellipsis; max-width: 40vw; }
+    .chat-header-right { gap: 0.3rem; }
+    .channel-header-tools { margin-left: 0; }
+
+    /* View toggle: smaller on mobile */
+    .view-toggle button { padding: 0.25rem 0.5rem; font-size: 0.7rem; }
+
+    /* Messages area */
+    .messages { padding: 0.3rem 0.5rem; }
+
+    /* Input area: always visible at bottom */
+    .input-area { padding: 0.5rem; flex-shrink: 0; }
+    .input-row { gap: 0.3rem; }
+    .input-area textarea { font-size: 0.85rem; min-height: 36px; padding: 0.4rem 0.5rem; }
+
+    /* Hide TTL on mobile to save space */
+    .ttl-control { display: none; }
+
+    /* Send button: compact */
+    .send-btn { padding: 0.4rem 0.7rem; font-size: 0.8rem; }
+
+    /* Attach/emoji buttons: compact */
+    .attach-btn { padding: 0.4rem; font-size: 0.85rem; }
+
+    /* Message styling: tighter */
+    .msg { padding: 0.3rem 0.5rem; }
+    .msg .meta .author { font-size: 0.75rem; }
+    .msg .meta .ts { font-size: 0.6rem; }
+    .msg .body { font-size: 0.82rem; }
+
+    /* Images: fit mobile */
+    .msg .attachment-img { max-width: 100%; }
+    .msg .attachment-audio audio { max-width: 100%; }
+
+    /* Auth box: fit small screens */
+    .auth-box { width: 90vw; max-width: 340px; padding: 1.5rem; }
+
+    /* Admin/overlay panels: full width on mobile */
+    .admin-panel { width: 95vw !important; max-width: 95vw !important;
+                   max-height: 90vh; margin: auto; }
+
+    /* Search bar: compact */
+    .search-bar { padding: 0.4rem 0.5rem; }
+    .search-bar input { font-size: 0.8rem; }
+
+    /* Pinned banner */
+    .pinned-banner-bar { padding: 0.3rem 0.5rem; font-size: 0.75rem; }
+
+    /* Topic views */
+    .topic-list { padding: 0.3rem 0.5rem; }
+    .new-topic-form { padding: 0.5rem; }
+    .thread-header { padding: 0.5rem; }
+    .thread-body { padding: 0.5rem; }
+
+    /* E2E sidebar bottom: smaller */
+    .sidebar-bottom { padding: 0.5rem 0.7rem; }
+
+    /* Emoji picker: fit screen */
+    .emoji-picker { width: 280px; max-width: 90vw; right: 0; left: auto; }
+
+    /* Widget panel */
+    .widget-panel { max-height: 40vh; }
+
+    /* Video grid */
+    .video-grid { grid-template-columns: 1fr !important; }
+    .video-controls { flex-wrap: wrap; gap: 0.3rem; }
+    .video-controls button { font-size: 0.7rem; padding: 0.3rem 0.5rem; }
+  }

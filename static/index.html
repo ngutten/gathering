@@ -29,6 +29,7 @@
 <!-- Chat Screen -->
 <div id="chat-screen">
   <div class="layout">
+    <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
     <div class="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-header-left">
@@ -106,6 +107,7 @@
     </div>
     <div class="chat-main">
       <div class="chat-header">
+        <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()">&#x2630;</button>
         <h2 id="chat-channel-name">#general</h2>
         <div class="channel-header-tools">
           <button class="ch-tool-btn" onclick="togglePinnedBanner()" title="Pinned Messages">&#x1F4CC;</button>

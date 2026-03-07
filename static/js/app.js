@@ -124,6 +124,20 @@ window.openPinnedPanel = openPinnedPanel;
 window.closePinnedPanel = closePinnedPanel;
 window.togglePinnedBanner = togglePinnedBanner;
 window.setNotifPref = setNotifPref;
+window.toggleSidebar = function() {
+  document.querySelector('.sidebar').classList.toggle('open');
+  document.getElementById('sidebar-backdrop').classList.toggle('open');
+};
+function closeSidebar() {
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('open');
+}
+// Auto-close sidebar on mobile when switching channels
+on('channel-switched', closeSidebar);
+// Auto-close sidebar when any button inside it is clicked
+document.querySelector('.sidebar').addEventListener('click', (e) => {
+  if (e.target.closest('button')) closeSidebar();
+});
 window.openProfile = openProfile;
 window.closeProfile = closeProfile;
 window.openEditProfile = openEditProfile;
