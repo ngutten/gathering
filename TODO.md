@@ -15,7 +15,7 @@
 
 ## Polish
 - [x] Accessibility (ARIA labels, keyboard navigation, screen reader support)
-- [ ] Mobile-responsive CSS improvements
+- [x] Mobile-responsive CSS improvements
 
 ## Already Implemented
 - Reply-to messages (full implementation: DB fields, protocol, UI with click-to-scroll)

@@ -2,7 +2,7 @@
 
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
-import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests } from './crypto.js';
+import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64 } from './crypto.js';
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
@@ -336,7 +336,20 @@ export function handleServerMsg(msg) {
       break;
 
     case 'PublicKeys':
-      Object.assign(state.publicKeyCache, msg.keys);
+      for (const [user, pk] of Object.entries(msg.keys)) {
+        const status = checkPinnedKey(user, pk);
+        if (status === 'mismatch') {
+          emit('system-message',
+            `WARNING: Public key for ${user} has changed since last seen! ` +
+            `Old fingerprint: ${fingerprintFromBase64(getPinnedKey(user))} ` +
+            `New fingerprint: ${fingerprintFromBase64(pk)}. ` +
+            `This could indicate a compromised account or server. ` +
+            `The old key is still trusted — verify with the user out-of-band before using the new key.`);
+          // Do NOT update the cache with the mismatched key
+          continue;
+        }
+        state.publicKeyCache[user] = pk;
+      }
       break;
 
     case 'ChannelKeyData': {
@@ -357,18 +370,75 @@ export function handleServerMsg(msg) {
     }
 
     case 'ChannelKeyRequest': {
-      if (state.channelKeys[msg.channel]) {
-        if (isDMChannel(msg.channel)) {
-          const sealed = encryptChannelKeyForUser(state.channelKeys[msg.channel], msg.public_key);
-          send('ProvideChannelKey', {
-            channel: msg.channel,
-            target_user: msg.requesting_user,
-            encrypted_key: sealed,
-          });
-          state.publicKeyCache[msg.requesting_user] = msg.public_key;
-        } else {
-          showKeyApproval(msg.channel, msg.requesting_user, msg.public_key);
+      if (!state.channelKeys[msg.channel]) break;
+
+      if (isDMChannel(msg.channel)) {
+        // DM auto-share: verify the public key matches what we've pinned for this user.
+        // If we have no pinned key, fetch independently and verify before sharing.
+        const tofuStatus = checkPinnedKey(msg.requesting_user, msg.public_key);
+        if (tofuStatus === 'mismatch') {
+          emit('system-message',
+            `Blocked DM key request from ${msg.requesting_user}: ` +
+            `public key does not match previously known key. ` +
+            `This could indicate a compromised server or impersonation. ` +
+            `Key fingerprint: ${fingerprintFromBase64(msg.public_key)}`);
+          break;
         }
+        if (tofuStatus === 'new') {
+          // First time seeing this key — verify independently via GetPublicKeys
+          // before trusting the server-relayed key
+          const user = msg.requesting_user;
+          const channel = msg.channel;
+          const relayedKey = msg.public_key;
+          send('GetPublicKeys', { usernames: [user] });
+          const checkInterval = setInterval(() => {
+            if (state.publicKeyCache[user]) {
+              clearInterval(checkInterval);
+              if (state.publicKeyCache[user] !== relayedKey) {
+                emit('system-message',
+                  `Blocked DM key request from ${user}: ` +
+                  `server-relayed key does not match fetched key. ` +
+                  `This could indicate a server-side key substitution attack.`);
+                return;
+              }
+              // Keys match — pin and share
+              pinPublicKey(user, relayedKey);
+              const sealed = encryptChannelKeyForUser(state.channelKeys[channel], relayedKey);
+              send('ProvideChannelKey', { channel, target_user: user, encrypted_key: sealed });
+            }
+          }, 200);
+          setTimeout(() => clearInterval(checkInterval), 5000);
+          break;
+        }
+        // tofuStatus === 'ok' — key matches pinned, safe to auto-share
+        const sealed = encryptChannelKeyForUser(state.channelKeys[msg.channel], msg.public_key);
+        send('ProvideChannelKey', {
+          channel: msg.channel,
+          target_user: msg.requesting_user,
+          encrypted_key: sealed,
+        });
+      } else {
+        // Non-DM: independently verify the public key before showing approval
+        const user = msg.requesting_user;
+        const channel = msg.channel;
+        const relayedKey = msg.public_key;
+        send('GetPublicKeys', { usernames: [user] });
+        const checkInterval = setInterval(() => {
+          if (state.publicKeyCache[user]) {
+            clearInterval(checkInterval);
+            if (state.publicKeyCache[user] !== relayedKey) {
+              emit('system-message',
+                `Blocked key request from ${user} for #${channel}: ` +
+                `server-relayed key does not match fetched key. ` +
+                `This could indicate a server-side key substitution attack. ` +
+                `Relayed: ${fingerprintFromBase64(relayedKey)} vs ` +
+                `Fetched: ${fingerprintFromBase64(state.publicKeyCache[user])}`);
+              return;
+            }
+            showKeyApproval(channel, user, relayedKey);
+          }
+        }, 200);
+        setTimeout(() => clearInterval(checkInterval), 5000);
       }
       break;
     }
@@ -405,6 +475,8 @@ export function handleServerMsg(msg) {
         const waitForKey = setInterval(() => {
           if (state.publicKeyCache[msg.other_user]) {
             clearInterval(waitForKey);
+            // Pin the other user's key on first DM (TOFU)
+            pinPublicKey(msg.other_user, state.publicKeyCache[msg.other_user]);
             const sealedForOther = encryptChannelKeyForUser(chKey, state.publicKeyCache[msg.other_user]);
             send('ProvideChannelKey', { channel: msg.channel, target_user: msg.other_user, encrypted_key: sealedForOther });
           }

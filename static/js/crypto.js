@@ -4,6 +4,60 @@ import state, { emit } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
 
+// ── TOFU (Trust On First Use) public key pinning ────────────────────
+// Stores known user→publicKey mappings in localStorage.
+// On first contact, the key is pinned. If a different key is later seen
+// for the same user, the client warns and blocks key sharing.
+const PINNED_KEYS_STORAGE = 'gathering_pinned_keys';
+
+function loadPinnedKeys() {
+  try { return JSON.parse(localStorage.getItem(PINNED_KEYS_STORAGE) || '{}'); }
+  catch { return {}; }
+}
+
+function savePinnedKeys(pins) {
+  localStorage.setItem(PINNED_KEYS_STORAGE, JSON.stringify(pins));
+}
+
+/** Pin a public key for a user (TOFU). Returns true if OK, false if conflict. */
+export function pinPublicKey(username, publicKey) {
+  const pins = loadPinnedKeys();
+  if (pins[username] && pins[username] !== publicKey) {
+    return false; // key changed — conflict
+  }
+  if (!pins[username]) {
+    pins[username] = publicKey;
+    savePinnedKeys(pins);
+  }
+  return true;
+}
+
+/** Check a public key against the pinned key. Returns 'ok', 'new', or 'mismatch'. */
+export function checkPinnedKey(username, publicKey) {
+  const pins = loadPinnedKeys();
+  if (!pins[username]) return 'new';
+  return pins[username] === publicKey ? 'ok' : 'mismatch';
+}
+
+/** Get the pinned public key for a user, or null. */
+export function getPinnedKey(username) {
+  return loadPinnedKeys()[username] || null;
+}
+
+/** Remove a pinned key (for manual trust reset). */
+export function unpinKey(username) {
+  const pins = loadPinnedKeys();
+  delete pins[username];
+  savePinnedKeys(pins);
+}
+
+/** Compute a short hex fingerprint from a base64 public key string. */
+export function fingerprintFromBase64(pubKeyBase64) {
+  const raw = sodium.from_base64(pubKeyBase64);
+  const hash = sodium.crypto_generichash(32, raw);
+  return sodium.to_hex(hash).substring(0, 16);
+}
+
 export async function initE2E() {
   // Wait for libsodium to be loaded by the shim
   while (typeof sodium === 'undefined' || !sodium.ready) {
@@ -34,7 +88,10 @@ export function generateE2EKey(force) {
   localStorage.setItem('gathering_e2e_pk', sodium.to_base64(kp.publicKey));
   state.e2eReady = true;
   state.channelKeys = {};
-  send('UploadPublicKey', { public_key: sodium.to_base64(kp.publicKey) });
+  const pkB64 = sodium.to_base64(kp.publicKey);
+  send('UploadPublicKey', { public_key: pkB64 });
+  // Pin our own key
+  if (state.currentUser) pinPublicKey(state.currentUser, pkB64);
   updateKeyUI();
   emit('system-message', 'E2E keypair generated. Export your key from the sidebar to back it up. If lost, encrypted history cannot be recovered.');
   return true;
@@ -141,6 +198,11 @@ export function importPrivateKey() {
       localStorage.setItem('gathering_e2e_sk', data.sk);
       localStorage.setItem('gathering_e2e_pk', data.pk);
       send('UploadPublicKey', { public_key: data.pk });
+      // Pin our own key (overwrite any previous pin since this is an explicit import)
+      if (state.currentUser) {
+        unpinKey(state.currentUser);
+        pinPublicKey(state.currentUser, data.pk);
+      }
       emit('system-message', 'Key imported successfully. Re-request channel keys to decrypt history.');
       state.channelKeys = {};
       updateKeyUI();
@@ -210,13 +272,20 @@ function isDenied(channel, user) {
 export function showKeyApproval(channel, user, publicKey) {
   if (state.pendingKeyRequests.some(r => r.channel === channel && r.user === user)) return;
   if (isDenied(channel, user)) return;
-  state.pendingKeyRequests.push({ channel, user, publicKey });
+
+  // TOFU check: does this key match what we've pinned for this user?
+  const tofuStatus = checkPinnedKey(user, publicKey);
+  state.pendingKeyRequests.push({ channel, user, publicKey, tofuStatus });
   renderKeyRequests();
 }
 
 export function approveKeyRequest(index) {
   const req = state.pendingKeyRequests[index];
   if (!req || !state.channelKeys[req.channel]) return;
+
+  // Pin this user's public key on approval (TOFU)
+  pinPublicKey(req.user, req.publicKey);
+
   const sealed = encryptChannelKeyForUser(state.channelKeys[req.channel], req.publicKey);
   send('ProvideChannelKey', {
     channel: req.channel,
@@ -254,14 +323,29 @@ export function renderKeyRequests() {
   }
   el.innerHTML = '<div style="padding:0.3rem 1rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border);">' +
     '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--orange);letter-spacing:0.05em;margin-bottom:0.3rem;">Key Requests</div>' +
-    state.pendingKeyRequests.map((r, i) =>
-      `<div style="font-size:0.75rem;margin-bottom:0.4rem;padding:0.3rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;">` +
-      `<div><strong>${escapeHtml(r.user)}</strong> wants access to <strong>#${escapeHtml(r.channel)}</strong></div>` +
-      `<div style="display:flex;gap:0.3rem;margin-top:0.2rem;">` +
-      `<button onclick="approveKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--green);color:#000;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Approve</button>` +
-      `<button onclick="denyKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--red);color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Deny</button>` +
-      `</div></div>`
-    ).join('') +
+    state.pendingKeyRequests.map((r, i) => {
+      const fp = fingerprintFromBase64(r.publicKey);
+      const isMismatch = r.tofuStatus === 'mismatch';
+      const isNew = r.tofuStatus === 'new';
+      const borderColor = isMismatch ? 'var(--red)' : 'var(--border)';
+      let warning = '';
+      if (isMismatch) {
+        warning = `<div style="color:var(--red);font-weight:bold;font-size:0.7rem;margin-top:0.2rem;">` +
+          `WARNING: Key does not match previously known key for this user!</div>`;
+      } else if (isNew) {
+        warning = `<div style="color:var(--orange);font-size:0.65rem;margin-top:0.1rem;">First time seeing this user's key</div>`;
+      }
+      return `<div style="font-size:0.75rem;margin-bottom:0.4rem;padding:0.3rem;background:var(--bg);border:1px solid ${borderColor};border-radius:4px;">` +
+        `<div><strong>${escapeHtml(r.user)}</strong> wants access to <strong>#${escapeHtml(r.channel)}</strong></div>` +
+        `<div style="font-size:0.6rem;color:var(--muted);margin-top:0.1rem;font-family:monospace;">Key: ${escapeHtml(fp)}</div>` +
+        warning +
+        `<div style="display:flex;gap:0.3rem;margin-top:0.2rem;">` +
+        (isMismatch
+          ? `<button onclick="approveKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--red);color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;" title="Key mismatch — only approve if you have verified this out-of-band">Force Approve</button>`
+          : `<button onclick="approveKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--green);color:#000;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Approve</button>`) +
+        `<button onclick="denyKeyRequest(${i})" style="padding:0.15rem 0.4rem;background:var(--red);color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.7rem;">Deny</button>` +
+        `</div></div>`;
+    }).join('') +
     '</div>';
 }
 
@@ -301,10 +385,20 @@ export async function rekeyChannel(channel) {
   state.channelKeys[channel] = newKey;
   const newKeys = {};
   newKeys[state.currentUser] = encryptChannelKeyForUser(newKey, sodium.to_base64(state.myKeyPair.publicKey));
+  let skipped = 0;
   for (const [user, pk] of Object.entries(state.publicKeyCache)) {
     if (user !== state.currentUser) {
+      // Only re-key to users whose public keys pass TOFU check
+      const status = checkPinnedKey(user, pk);
+      if (status === 'mismatch') {
+        skipped++;
+        continue;
+      }
       newKeys[user] = encryptChannelKeyForUser(newKey, pk);
     }
   }
   send('RotateChannelKey', { channel, new_keys: newKeys });
+  if (skipped > 0) {
+    emit('system-message', `Key rotation: skipped ${skipped} user(s) with mismatched public keys.`);
+  }
 }
