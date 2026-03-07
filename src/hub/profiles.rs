@@ -50,6 +50,17 @@ impl Hub {
                         self.send_error(id, "File not found").await;
                         return;
                     }
+                    // Validate file size (2MB) and image MIME type
+                    if let Some((size, mime)) = self.db.get_file_size_and_mime(&value) {
+                        if size > 2 * 1024 * 1024 {
+                            self.send_error(id, "Avatar must be under 2MB").await;
+                            return;
+                        }
+                        if !mime.starts_with("image/") {
+                            self.send_error(id, "Avatar must be an image file").await;
+                            return;
+                        }
+                    }
                 }
             }
             "status" | "about" => {}

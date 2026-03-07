@@ -84,6 +84,15 @@ impl Db {
         ).ok()
     }
 
+    pub fn get_file_size_and_mime(&self, file_id: &str) -> Option<(u64, String)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT size, mime_type FROM files WHERE id = ?1",
+            params![file_id],
+            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+        ).ok()
+    }
+
     pub fn delete_file_record(&self, file_id: &str) -> Option<(String, String)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let info: Option<(String, String)> = conn.query_row(

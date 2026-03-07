@@ -792,10 +792,10 @@
   .profile-avatar-upload:hover { border-color: var(--accent); }
   .profile-name-section { flex: 1; min-width: 0; }
   .profile-username { font-size: 1.1rem; font-weight: 600; color: var(--accent); }
-  .profile-status { font-size: 0.8rem; color: var(--text2); margin-top: 0.2rem; }
+  .profile-status { font-size: 0.8rem; color: var(--text2); margin-top: 0.2rem; word-break: break-word; overflow-wrap: break-word; }
   .profile-about-section { margin-bottom: 1rem; }
   .profile-label { font-size: 0.7rem; color: var(--text2); text-transform: uppercase; margin-bottom: 0.3rem; }
-  .profile-about { font-size: 0.85rem; color: var(--text); line-height: 1.5; }
+  .profile-about { font-size: 0.85rem; color: var(--text); line-height: 1.5; word-break: break-word; overflow-wrap: break-word; }
   .profile-field { margin-bottom: 0.8rem; }
   .profile-field input, .profile-field textarea {
     width: 100%; padding: 0.4rem 0.6rem; background: var(--bg); border: 1px solid var(--border);

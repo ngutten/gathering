@@ -31,8 +31,9 @@ impl Db {
         }
 
         if !query.is_empty() {
-            let pattern = format!("%{query}%");
-            sql.push_str(&format!(" AND content LIKE ?{idx}"));
+            let escaped_query = query.replace('%', "\\%").replace('_', "\\_");
+            let pattern = format!("%{escaped_query}%");
+            sql.push_str(&format!(" AND content LIKE ?{idx} ESCAPE '\\'"));
             params.push(Box::new(pattern));
             idx += 1;
         }
@@ -57,8 +58,9 @@ impl Db {
 
         if let Some(target) = mentions {
             // mentions column stores JSON array like ["alice","bob"]
-            let mention_pattern = format!("%\"{}\"%" , target);
-            sql.push_str(&format!(" AND mentions LIKE ?{idx}"));
+            let escaped_target = target.replace('%', "\\%").replace('_', "\\_");
+            let mention_pattern = format!("%\"{escaped_target}\"%");
+            sql.push_str(&format!(" AND mentions LIKE ?{idx} ESCAPE '\\'"));
             params.push(Box::new(mention_pattern));
             idx += 1;
         }

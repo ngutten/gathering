@@ -2,6 +2,8 @@ use super::Hub;
 use crate::protocol::ServerMsg;
 
 const MAX_SEARCH_RESULTS: u32 = 50;
+const MAX_SEARCH_QUERY_LEN: usize = 1024;
+const MAX_SEARCH_FILTER_LEN: usize = 128;
 
 impl Hub {
     pub(super) async fn handle_search_messages(
@@ -9,6 +11,16 @@ impl Hub {
         from: Option<String>, date_start: Option<String>, date_end: Option<String>,
         mentions: Option<String>,
     ) {
+        if query.len() > MAX_SEARCH_QUERY_LEN
+            || channel.as_ref().map_or(false, |v| v.len() > MAX_SEARCH_FILTER_LEN)
+            || from.as_ref().map_or(false, |v| v.len() > MAX_SEARCH_FILTER_LEN)
+            || mentions.as_ref().map_or(false, |v| v.len() > MAX_SEARCH_FILTER_LEN)
+            || date_start.as_ref().map_or(false, |v| v.len() > MAX_SEARCH_FILTER_LEN)
+            || date_end.as_ref().map_or(false, |v| v.len() > MAX_SEARCH_FILTER_LEN)
+        {
+            self.send_error(id, "Search query or filter too long").await;
+            return;
+        }
         let clients = self.clients.lock().await;
         let username = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => c.username.clone(),

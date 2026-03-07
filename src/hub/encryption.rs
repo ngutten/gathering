@@ -1,8 +1,15 @@
 use super::Hub;
 use crate::protocol::ServerMsg;
 
+const MAX_KEY_LEN: usize = 4096;
+const MAX_ROTATE_KEYS: usize = 200;
+
 impl Hub {
     pub(super) async fn handle_upload_public_key(&self, id: usize, public_key: String) {
+        if public_key.len() > MAX_KEY_LEN {
+            self.send_error(id, "Public key too large").await;
+            return;
+        }
         let clients = self.clients.lock().await;
         let username = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -24,6 +31,10 @@ impl Hub {
     }
 
     pub(super) async fn handle_create_encrypted_channel(&self, id: usize, channel: String, encrypted_channel_key: String) {
+        if encrypted_channel_key.len() > MAX_KEY_LEN {
+            self.send_error(id, "Encrypted key too large").await;
+            return;
+        }
         let clients = self.clients.lock().await;
         let username = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => c.username.clone(),
@@ -71,6 +82,10 @@ impl Hub {
     }
 
     pub(super) async fn handle_provide_channel_key(&self, id: usize, channel: String, target_user: String, encrypted_key: String) {
+        if encrypted_key.len() > MAX_KEY_LEN {
+            self.send_error(id, "Encrypted key too large").await;
+            return;
+        }
         let clients = self.clients.lock().await;
         let (username, in_channel) = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
@@ -106,6 +121,10 @@ impl Hub {
     }
 
     pub(super) async fn handle_rotate_channel_key(&self, id: usize, channel: String, new_keys: std::collections::HashMap<String, String>) {
+        if new_keys.len() > MAX_ROTATE_KEYS || new_keys.values().any(|k| k.len() > MAX_KEY_LEN) {
+            self.send_error(id, "Key rotation payload too large").await;
+            return;
+        }
         let clients = self.clients.lock().await;
         let (username, in_channel) = match clients.get(&id) {
             Some(c) if !c.username.is_empty() => (c.username.clone(), c.channels.contains(&channel)),
