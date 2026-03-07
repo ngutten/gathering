@@ -97,10 +97,100 @@ export function handleInputKey(e) {
 export async function handleFileSelect(event) {
   const files = event.target.files;
   if (!files.length) return;
+  await uploadFiles(files);
+  event.target.value = '';
+}
 
+export function renderPendingFiles() {
+  const el = document.getElementById('pending-files');
+  el.innerHTML = state.pendingAttachments.map((f, i) =>
+    `<div class="pending-file">${escapeHtml(f.filename)} <span class="file-size">(${formatFileSize(f.size)})</span><span class="remove-file" onclick="removePendingFile(${i})">&times;</span></div>`
+  ).join('');
+}
+
+export function removePendingFile(index) {
+  state.pendingAttachments.splice(index, 1);
+  renderPendingFiles();
+}
+
+export function startEditMessage(msgId) {
+  const msgEl = document.querySelector(`.msg[data-msg-id="${msgId}"]`);
+  if (!msgEl) return;
+  const content = msgEl.getAttribute('data-content');
+  state.editingMessageId = msgId;
+  const input = document.getElementById('msg-input');
+  input.value = content;
+  input.focus();
+  document.getElementById('edit-banner').classList.add('active');
+  document.getElementById('send-btn').textContent = 'Save';
+}
+
+export function cancelEdit() {
+  state.editingMessageId = null;
+  document.getElementById('msg-input').value = '';
+  document.getElementById('edit-banner').classList.remove('active');
+  document.getElementById('send-btn').textContent = 'Send';
+}
+
+export function deleteMessage(msgId) {
+  send('DeleteMessage', { message_id: msgId });
+}
+
+// ── Drag-and-drop + paste file handling ──
+
+export function setupDragAndDrop() {
+  const chatPanel = document.querySelector('.chat-main');
+  if (!chatPanel) return;
+
+  let dragCounter = 0;
+
+  chatPanel.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    if (dragCounter === 1) chatPanel.classList.add('drop-active');
+  });
+
+  chatPanel.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter === 0) chatPanel.classList.remove('drop-active');
+  });
+
+  chatPanel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+
+  chatPanel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    chatPanel.classList.remove('drop-active');
+    const files = e.dataTransfer.files;
+    if (files.length) uploadFiles(files);
+  });
+
+  // Paste images from clipboard
+  document.getElementById('msg-input').addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files = [];
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length) {
+      e.preventDefault();
+      uploadFiles(files);
+    }
+  });
+}
+
+async function uploadFiles(fileList) {
   const progress = document.getElementById('upload-progress');
 
-  for (const file of files) {
+  for (const file of fileList) {
     if (file.size > MAX_UPLOAD_SIZE) {
       progress.textContent = `${file.name}: too large (max 50MB)`;
       continue;
@@ -138,43 +228,6 @@ export async function handleFileSelect(event) {
       progress.textContent = `Upload failed: ${e.message}`;
     }
   }
-
-  event.target.value = '';
-}
-
-export function renderPendingFiles() {
-  const el = document.getElementById('pending-files');
-  el.innerHTML = state.pendingAttachments.map((f, i) =>
-    `<div class="pending-file">${escapeHtml(f.filename)} <span class="file-size">(${formatFileSize(f.size)})</span><span class="remove-file" onclick="removePendingFile(${i})">&times;</span></div>`
-  ).join('');
-}
-
-export function removePendingFile(index) {
-  state.pendingAttachments.splice(index, 1);
-  renderPendingFiles();
-}
-
-export function startEditMessage(msgId) {
-  const msgEl = document.querySelector(`.msg[data-msg-id="${msgId}"]`);
-  if (!msgEl) return;
-  const content = msgEl.getAttribute('data-content');
-  state.editingMessageId = msgId;
-  const input = document.getElementById('msg-input');
-  input.value = content;
-  input.focus();
-  document.getElementById('edit-banner').classList.add('active');
-  document.getElementById('send-btn').textContent = 'Save';
-}
-
-export function cancelEdit() {
-  state.editingMessageId = null;
-  document.getElementById('msg-input').value = '';
-  document.getElementById('edit-banner').classList.remove('active');
-  document.getElementById('send-btn').textContent = 'Send';
-}
-
-export function deleteMessage(msgId) {
-  send('DeleteMessage', { message_id: msgId });
 }
 
 export function joinChannel() {
