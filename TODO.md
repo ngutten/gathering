@@ -11,12 +11,10 @@
 - [x] Message pinning in channels (pin/unpin, pinned messages panel)
 
 ## Infrastructure
-- [ ] WebSocket reconnect resilience (missed-message catch-up via last-seen message ID)
-- [ ] Push notifications (Web Push API for mentions/DMs when tab is backgrounded)
 - [ ] Multi-device E2E key sync
 
 ## Polish
-- [ ] Accessibility (ARIA labels, keyboard navigation, screen reader support)
+- [x] Accessibility (ARIA labels, keyboard navigation, screen reader support)
 - [ ] Mobile-responsive CSS improvements
 
 ## Already Implemented

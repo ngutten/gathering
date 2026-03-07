@@ -11,6 +11,53 @@ const TYPING_INDICATOR_TIMEOUT_MS = 3000;
 const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
 const MSG_GROUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
+// ── Accessibility: modal focus management ──
+
+let _previousFocus = null;
+
+function openOverlay(overlayId) {
+  _previousFocus = document.activeElement;
+  const overlay = document.getElementById(overlayId);
+  if (overlay) {
+    overlay.classList.add('active');
+    // Focus the first focusable element inside the panel
+    requestAnimationFrame(() => {
+      const focusable = overlay.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (focusable) focusable.focus();
+    });
+  }
+}
+
+function closeOverlay(overlayId) {
+  const overlay = document.getElementById(overlayId);
+  if (overlay) overlay.classList.remove('active');
+  if (_previousFocus && _previousFocus.focus) {
+    _previousFocus.focus();
+    _previousFocus = null;
+  }
+}
+
+// Global Escape key handler for all overlays
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const overlays = [
+    { id: 'user-settings-overlay', close: 'closeUserSettings' },
+    { id: 'profile-overlay', close: 'closeProfile' },
+    { id: 'admin-overlay', close: 'closeAdminPanel' },
+    { id: 'channel-settings-overlay', close: 'closeChannelSettings' },
+    { id: 'pinned-messages-overlay', close: 'closePinnedPanel' },
+    { id: 'files-overlay', close: 'closeFileManager' },
+  ];
+  for (const { id, close } of overlays) {
+    const el = document.getElementById(id);
+    if (el && el.classList.contains('active')) {
+      if (window[close]) window[close]();
+      e.stopPropagation();
+      return;
+    }
+  }
+});
+
 
 export function appendMessage(msg) {
   if (msg.channel && msg.channel !== state.currentChannel) return;
@@ -50,12 +97,12 @@ export function appendMessage(msg) {
   const isOwn = msg.author === state.currentUser;
   const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[msg.channel || state.currentChannel] === state.currentUser);
   const isEncrypted = state.encryptedChannels.has(msg.channel || state.currentChannel);
-  actionsHtml = '<div class="msg-actions">';
-  if (!isEncrypted) actionsHtml += `<button class="react-btn" data-msg-id="${msg.id}">+&#x1F600;</button>`;
-  actionsHtml += `<button onclick="startReply('${msg.id}')">reply</button>`;
-  if (canPin) actionsHtml += `<button onclick="togglePinMessage('${msg.id}')">${msg.pinned ? 'unpin' : 'pin'}</button>`;
-  if (isOwn) actionsHtml += `<button onclick="startEditMessage('${msg.id}')">edit</button>`;
-  if (isOwn || state.isAdmin) actionsHtml += `<button class="del-btn" onclick="deleteMessage('${msg.id}')">del</button>`;
+  actionsHtml = '<div class="msg-actions" role="toolbar" aria-label="Message actions">';
+  if (!isEncrypted) actionsHtml += `<button class="react-btn" data-msg-id="${msg.id}" aria-label="Add reaction">+&#x1F600;</button>`;
+  actionsHtml += `<button onclick="startReply('${msg.id}')" aria-label="Reply">reply</button>`;
+  if (canPin) actionsHtml += `<button onclick="togglePinMessage('${msg.id}')" aria-label="${msg.pinned ? 'Unpin' : 'Pin'} message">${msg.pinned ? 'unpin' : 'pin'}</button>`;
+  if (isOwn) actionsHtml += `<button onclick="startEditMessage('${msg.id}')" aria-label="Edit message">edit</button>`;
+  if (isOwn || state.isAdmin) actionsHtml += `<button class="del-btn" onclick="deleteMessage('${msg.id}')" aria-label="Delete message">del</button>`;
   actionsHtml += '</div>';
 
   // Reply reference bar
@@ -208,6 +255,13 @@ export function renderChannels() {
 
   // Render text channels
   const el = document.getElementById('channel-list');
+
+  // Skip DOM rebuild if focus is inside — avoids stealing focus mid-tab
+  if (document.activeElement && el.contains(document.activeElement)) {
+    renderVoiceChannelList();
+    return;
+  }
+
   el.innerHTML = textChannels.map(ch => {
     const lock = ch.encrypted ? '&#x1F512; ' : ch.restricted ? '&#x1F6E1; ' : '#';
     const unread = state.unreadCounts[ch.name] || 0;
@@ -217,7 +271,9 @@ export function renderChannels() {
     const boldClass = unread > 0 ? ' has-unread' : '';
     const noKeyClass = ch.encrypted && !state.e2eReady ? ' no-e2e-key' : '';
     return `<div class="channel-item${boldClass}${noKeyClass} ${ch.name === state.currentChannel ? 'active' : ''}"
-         onclick="switchChannel('${escapeHtml(ch.name)}')">
+         onclick="switchChannel('${escapeHtml(ch.name)}')" tabindex="0" role="button" data-channel="${escapeHtml(ch.name)}"
+         aria-label="${escapeHtml(ch.name)} channel${unread > 0 ? ', ' + unread + ' unread' : ''}"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();switchChannel('${escapeHtml(ch.name)}');}">
       <span>${lock}${escapeHtml(ch.name)}</span>
       <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
     </div>`;
@@ -242,7 +298,9 @@ export function renderVoiceChannelList() {
     const boldClass = unread > 0 ? ' has-unread' : '';
 
     let html = `<div class="voice-channel-item${boldClass}${isViewing ? ' viewing' : ''}">
-      <div class="voice-channel-header" onclick="switchChannel('${escapeHtml(ch.name)}')">
+      <div class="voice-channel-header" onclick="switchChannel('${escapeHtml(ch.name)}')" tabindex="0" role="button"
+           aria-label="Voice channel ${escapeHtml(ch.name)}${unread > 0 ? ', ' + unread + ' unread' : ''}"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();switchChannel('${escapeHtml(ch.name)}');}">
         <span class="voice-channel-name">&#x1F50A; ${escapeHtml(ch.name)}</span>
         <span class="channel-right">${unreadBadge}</span>
       </div>`;
@@ -251,7 +309,7 @@ export function renderVoiceChannelList() {
     if (occupants.length > 0) {
       html += '<div class="voice-channel-occupants">';
       occupants.forEach(u => {
-        html += `<div class="voice-channel-user"><span class="voice-dot"></span>${escapeHtml(u)}</div>`;
+        html += `<div class="voice-channel-user"><span class="voice-dot" aria-hidden="true"></span>${escapeHtml(u)}</div>`;
       });
       html += '</div>';
     }
@@ -281,13 +339,22 @@ export function renderOnlineUsers(users) {
   if (uncached.length > 0) {
     send('GetProfiles', { usernames: uncached });
   }
+
+  // Skip DOM rebuild if focus is inside the user list — the profile
+  // response will trigger another render once data is cached anyway
+  if (document.activeElement && el.contains(document.activeElement)) {
+    return;
+  }
+
   el.innerHTML = users.map(u => {
     const dmBtn = u !== state.currentUser ?
-      `<button class="dm-btn" onclick="startDM('${escapeHtml(u)}')" title="Message ${escapeHtml(u)}">&#x2709;</button>` : '';
+      `<button class="dm-btn" onclick="startDM('${escapeHtml(u)}')" title="Message ${escapeHtml(u)}" aria-label="Direct message ${escapeHtml(u)}">&#x2709;</button>` : '';
     const profile = state.profileCache[u] || {};
     const statusHtml = profile.status ? `<span class="user-item-status" title="${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span>` : '';
-    return `<div class="user-item">
-      <span class="user-item-name" onclick="openProfile('${escapeHtml(u)}')" style="cursor:pointer;">
+    return `<div class="user-item" data-username="${escapeHtml(u)}">
+      <span class="user-item-name" onclick="openProfile('${escapeHtml(u)}')" style="cursor:pointer;" tabindex="0" role="button"
+            aria-label="View profile for ${escapeHtml(u)}"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openProfile('${escapeHtml(u)}');}">
         ${avatarHtml(u, 18)}${escapeHtml(u)}
       </span>
       ${statusHtml}${dmBtn}
@@ -302,6 +369,12 @@ export function renderDMList() {
     el.innerHTML = '';
     return;
   }
+
+  // Skip DOM rebuild if focus is inside — avoids stealing focus mid-tab
+  if (document.activeElement && el.contains(document.activeElement)) {
+    return;
+  }
+
   el.innerHTML = entries.map(([ch, other]) => {
     const unread = state.unreadCounts[ch] || 0;
     const hasMention = state.unreadMentions[ch];
@@ -309,7 +382,9 @@ export function renderDMList() {
     const unreadBadge = unread > 0 ? `<span class="${badgeClass}">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
     const noKeyClass = !state.e2eReady ? ' no-e2e-key' : '';
-    return `<div class="dm-item${boldClass}${noKeyClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')">
+    return `<div class="dm-item${boldClass}${noKeyClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')" tabindex="0" role="button" data-channel="${escapeHtml(ch)}"
+         aria-label="Direct message with ${escapeHtml(other)}${unread > 0 ? ', ' + unread + ' unread' : ''}"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();switchChannel('${escapeHtml(ch)}');}">
       <span class="dm-name">&#x1F512; ${escapeHtml(other)}</span>
       ${unreadBadge}
     </div>`;
@@ -479,7 +554,7 @@ export function renderChannelMemberPanel(msg) {
   }
 
   content.innerHTML = html;
-  overlay.classList.add('active');
+  openOverlay('channel-settings-overlay');
 }
 
 export function openChannelSettings() {
@@ -488,8 +563,7 @@ export function openChannelSettings() {
 }
 
 export function closeChannelSettings() {
-  const overlay = document.getElementById('channel-settings-overlay');
-  if (overlay) overlay.classList.remove('active');
+  closeOverlay('channel-settings-overlay');
 }
 
 export function toggleChannelRestricted(channel, restricted) {
@@ -681,8 +755,7 @@ export function openPinnedPanel() {
 }
 
 export function closePinnedPanel() {
-  const overlay = document.getElementById('pinned-messages-overlay');
-  if (overlay) overlay.classList.remove('active');
+  closeOverlay('pinned-messages-overlay');
 }
 
 export function renderPinnedPanel(msg) {
@@ -771,7 +844,7 @@ export function avatarHtml(username, size) {
   const profile = state.profileCache[username];
   if (profile && profile.avatar_id) {
     const url = fileUrl('/api/files/' + profile.avatar_id);
-    return `<img class="user-avatar" src="${url}" alt="" style="width:${sz}px;height:${sz}px;border-radius:50%;object-fit:cover;">`;
+    return `<img class="user-avatar" src="${url}" alt="${escapeHtml(username)}'s avatar" style="width:${sz}px;height:${sz}px;border-radius:50%;object-fit:cover;">`;
   }
   // Generate a color from the username
   let hash = 0;
@@ -798,11 +871,11 @@ export function openProfile(username) {
   send('GetProfile', { username });
   // Show modal immediately with cached data (will update when response arrives)
   renderProfileModal(username);
-  document.getElementById('profile-overlay').classList.add('active');
+  openOverlay('profile-overlay');
 }
 
 export function closeProfile() {
-  document.getElementById('profile-overlay').classList.remove('active');
+  closeOverlay('profile-overlay');
 }
 
 export function renderProfileModal(username) {
@@ -962,13 +1035,13 @@ export function openUserSettings() {
       </div>
     </div>
   `;
-  document.getElementById('user-settings-overlay').classList.add('active');
+  openOverlay('user-settings-overlay');
   // Fetch fresh profile data
   send('GetProfile', { username: state.currentUser });
 }
 
 export function closeUserSettings() {
-  document.getElementById('user-settings-overlay').classList.remove('active');
+  closeOverlay('user-settings-overlay');
 }
 
 export function saveUserSettings() {
@@ -996,6 +1069,8 @@ export function initContextMenu() {
   const menu = document.createElement('div');
   menu.id = 'msg-context-menu';
   menu.className = 'msg-context-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Message actions');
   menu.style.display = 'none';
   document.body.appendChild(menu);
 

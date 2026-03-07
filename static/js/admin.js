@@ -5,14 +5,26 @@ import { send } from './transport.js';
 import { escapeHtml } from './render.js';
 import { emit } from './state.js';
 
+let _adminPrevFocus = null;
+
 export function openAdminPanel() {
-  document.getElementById('admin-overlay').classList.add('active');
+  _adminPrevFocus = document.activeElement;
+  const overlay = document.getElementById('admin-overlay');
+  overlay.classList.add('active');
   switchAdminTab('settings');
   send('GetSettings');
+  requestAnimationFrame(() => {
+    const focusable = overlay.querySelector('button, input, select, textarea');
+    if (focusable) focusable.focus();
+  });
 }
 
 export function closeAdminPanel() {
   document.getElementById('admin-overlay').classList.remove('active');
+  if (_adminPrevFocus && _adminPrevFocus.focus) {
+    _adminPrevFocus.focus();
+    _adminPrevFocus = null;
+  }
 }
 
 export function switchAdminTab(tab, btn) {

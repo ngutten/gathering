@@ -152,6 +152,8 @@ export function toggleEmojiPicker(inputId) {
 function createPicker() {
   const el = document.createElement('div');
   el.className = 'emoji-picker';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'Emoji picker');
   el.onclick = (e) => e.stopPropagation();
 
   // Search bar
@@ -189,10 +191,17 @@ function createPicker() {
 
   showCategory(catNames[0], el);
 
-  // Close picker on outside click
+  // Close picker on outside click or Escape
   document.addEventListener('click', (e) => {
     if (pickerEl && pickerEl.style.display !== 'none' && !pickerEl.contains(e.target) && e.target.id !== 'emoji-btn') {
       pickerEl.style.display = 'none';
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && pickerEl && pickerEl.style.display !== 'none') {
+      pickerEl.style.display = 'none';
+      const btn = document.getElementById('emoji-btn');
+      if (btn) btn.focus();
     }
   });
 
@@ -277,6 +286,8 @@ export function closeReactionPicker() {
 function createReactionPicker() {
   const el = document.createElement('div');
   el.className = 'emoji-picker reaction-picker';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'Reaction picker');
   el.onclick = (e) => e.stopPropagation();
 
   const search = document.createElement('input');

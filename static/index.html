@@ -9,15 +9,19 @@
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
+<a href="#msg-input" class="skip-link">Skip to message input</a>
 
 <!-- Auth Screen -->
-<div id="auth-screen">
+<div id="auth-screen" role="region" aria-label="Authentication">
   <div class="auth-box">
     <h1>&#x2381; Gathering</h1>
     <p>self-hosted &middot; encrypted &middot; ephemeral</p>
-    <div class="auth-error" id="auth-error"></div>
+    <div class="auth-error" id="auth-error" role="alert" aria-live="polite"></div>
+    <label for="username" class="sr-only">Username</label>
     <input type="text" id="username" placeholder="username" autocomplete="username">
+    <label for="password" class="sr-only">Password</label>
     <input type="password" id="password" placeholder="password" autocomplete="current-password">
+    <label for="invite-code" class="sr-only">Invite code</label>
     <input type="text" id="invite-code" placeholder="invite code" style="display:none">
     <div class="auth-buttons">
       <button class="btn-primary" onclick="doLogin()">Login</button>
@@ -30,15 +34,15 @@
 <div id="chat-screen">
   <div class="layout">
     <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
-    <div class="sidebar">
+    <nav class="sidebar" aria-label="Navigation">
       <div class="sidebar-header">
         <div class="sidebar-header-left">
           <h2>&#x2381; Gathering</h2>
-          <div class="user-info">logged in as <strong id="display-user" onclick="openProfile(this.textContent)" style="cursor:pointer;" title="View profile"></strong></div>
+          <div class="user-info">logged in as <strong id="display-user" onclick="openProfile(this.textContent)" style="cursor:pointer;" title="View profile" role="button" tabindex="0"></strong></div>
         </div>
         <div style="display:flex;gap:0.3rem;align-items:center;">
-          <button class="admin-btn" id="admin-gear-btn" style="display:none" onclick="openAdminPanel()" title="Admin">&#x2699;</button>
-          <button class="admin-btn" onclick="doLogout()" title="Logout">&#x23FB;</button>
+          <button class="admin-btn" id="admin-gear-btn" style="display:none" onclick="openAdminPanel()" title="Admin" aria-label="Admin settings">&#x2699;</button>
+          <button class="admin-btn" onclick="doLogout()" title="Logout" aria-label="Logout">&#x23FB;</button>
         </div>
       </div>
       <div class="sidebar-section">
@@ -86,8 +90,8 @@
         <button class="voice-btn voice-leave" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
       </div>
       <div class="sidebar-section" style="border-top:1px solid var(--border);padding-top:0.3rem;">
-        <button class="files-btn" onclick="openFileManager()">Files</button>
-        <button class="files-btn" onclick="openUserSettings()">Settings</button>
+        <button class="files-btn" onclick="openFileManager()" aria-label="Open file manager">Files</button>
+        <button class="files-btn" onclick="openUserSettings()" aria-label="Open user settings">Settings</button>
       </div>
       <div class="sidebar-bottom">
         <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code><span id="no-key-label" style="font-size:0.65rem;color:var(--red);">No key set</span></div>
@@ -104,21 +108,21 @@
           </div>
         </div>
       </div>
-    </div>
-    <div class="chat-main">
+    </nav>
+    <main class="chat-main" aria-label="Chat">
       <div class="chat-header">
-        <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()">&#x2630;</button>
+        <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle sidebar">&#x2630;</button>
         <h2 id="chat-channel-name">#general</h2>
         <div class="channel-header-tools">
-          <button class="ch-tool-btn" onclick="togglePinnedBanner()" title="Pinned Messages">&#x1F4CC;</button>
-          <button class="ch-tool-btn" onclick="openChannelSettings()" title="Channel Settings">&#x2699;</button>
+          <button class="ch-tool-btn" onclick="togglePinnedBanner()" title="Pinned Messages" aria-label="Pinned messages">&#x1F4CC;</button>
+          <button class="ch-tool-btn" onclick="openChannelSettings()" title="Channel Settings" aria-label="Channel settings">&#x2699;</button>
         </div>
-        <span class="typing" id="typing-indicator"></span>
+        <span class="typing" id="typing-indicator" aria-live="polite"></span>
         <button class="request-key-btn" id="request-key-btn" onclick="requestChannelKey()" style="display:none;" title="Request encryption key for this channel">Request Key</button>
         <div class="chat-header-right">
-          <button class="search-toggle-btn" onclick="toggleSearch()" title="Search">&#x1F50D;</button>
+          <button class="search-toggle-btn" onclick="toggleSearch()" title="Search" aria-label="Search messages">&#x1F50D;</button>
           <div style="position:relative;">
-            <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets">&#x29C8;</button>
+            <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets" aria-label="Widgets">&#x29C8;</button>
             <div class="widget-picker" id="widget-picker" style="display:none;"></div>
           </div>
           <div class="view-toggle">
@@ -142,9 +146,9 @@
       <div id="video-area" style="display:none;">
         <div class="video-grid" id="video-grid"></div>
         <div class="video-controls" id="video-controls">
-          <button id="camera-btn" onclick="toggleCamera()" title="Toggle Camera">&#x1F4F7; Camera</button>
-          <button id="screen-audio-btn" onclick="this.classList.toggle('active')" title="Include tab/app audio when sharing screen">&#x1F50A; Share Audio</button>
-          <button id="screenshare-btn" onclick="toggleScreenShare()" title="Share Screen">&#x1F5B5; Screen</button>
+          <button id="camera-btn" onclick="toggleCamera()" title="Toggle Camera" aria-label="Toggle camera">&#x1F4F7; Camera</button>
+          <button id="screen-audio-btn" onclick="this.classList.toggle('active')" title="Include tab/app audio when sharing screen" aria-label="Share audio">&#x1F50A; Share Audio</button>
+          <button id="screenshare-btn" onclick="toggleScreenShare()" title="Share Screen" aria-label="Share screen">&#x1F5B5; Screen</button>
         </div>
       </div>
 
@@ -158,7 +162,7 @@
           </div>
           <div class="pinned-banner-list" id="pinned-banner-list" style="display:none;"></div>
         </div>
-        <div class="messages" id="messages"></div>
+        <div class="messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages"></div>
         <div class="reply-banner" id="reply-banner">
           <span class="reply-banner-text">Replying to...</span>
           <button onclick="cancelReply()">Cancel</button>
@@ -169,9 +173,10 @@
         </div>
         <div class="input-area">
           <div class="input-row">
-            <button class="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file">&#x1F4CE;</button>
+            <button class="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file" aria-label="Attach file">&#x1F4CE;</button>
             <input type="file" id="file-input" style="display:none" multiple onchange="handleFileSelect(event)">
-            <button class="attach-btn" id="emoji-btn" onclick="toggleEmojiPicker('msg-input')" title="Emoji">&#x1F600;</button>
+            <button class="attach-btn" id="emoji-btn" onclick="toggleEmojiPicker('msg-input')" title="Emoji" aria-label="Emoji picker">&#x1F600;</button>
+            <label for="msg-input" class="sr-only">Message</label>
             <textarea id="msg-input" rows="1" placeholder="Type a message..."
                       onkeydown="handleInputKey(event)"></textarea>
             <div class="ttl-control">
@@ -259,16 +264,16 @@
           <div class="upload-progress" id="reply-upload-progress"></div>
         </div>
       </div>
-    </div>
+    </main>
   </div>
 </div>
 
 <!-- File Manager Overlay -->
-<div class="admin-overlay" id="files-overlay" onclick="if(event.target===this)closeFileManager()">
+<div class="admin-overlay" id="files-overlay" onclick="if(event.target===this)closeFileManager()" role="dialog" aria-modal="true" aria-labelledby="files-overlay-title">
   <div class="admin-panel">
     <div class="admin-panel-header">
-      <h2>File Manager</h2>
-      <button class="admin-panel-close" onclick="closeFileManager()">&times;</button>
+      <h2 id="files-overlay-title">File Manager</h2>
+      <button class="admin-panel-close" onclick="closeFileManager()" aria-label="Close">&times;</button>
     </div>
     <div class="admin-tab-content" id="files-content">
       <div style="color:var(--text2);font-size:0.8rem;">Loading files...</div>
@@ -277,11 +282,11 @@
 </div>
 
 <!-- Pinned Messages Overlay -->
-<div class="admin-overlay" id="pinned-messages-overlay" onclick="if(event.target===this)closePinnedPanel()">
+<div class="admin-overlay" id="pinned-messages-overlay" onclick="if(event.target===this)closePinnedPanel()" role="dialog" aria-modal="true" aria-labelledby="pinned-overlay-title">
   <div class="admin-panel">
     <div class="admin-panel-header">
-      <h2>Pinned Messages</h2>
-      <button class="admin-panel-close" onclick="closePinnedPanel()">&times;</button>
+      <h2 id="pinned-overlay-title">Pinned Messages</h2>
+      <button class="admin-panel-close" onclick="closePinnedPanel()" aria-label="Close">&times;</button>
     </div>
     <div class="admin-tab-content" id="pinned-messages-content">
       <div style="color:var(--text2);font-size:0.8rem;">Loading...</div>
@@ -290,11 +295,11 @@
 </div>
 
 <!-- Channel Settings Overlay -->
-<div class="admin-overlay" id="channel-settings-overlay" onclick="if(event.target===this)closeChannelSettings()">
+<div class="admin-overlay" id="channel-settings-overlay" onclick="if(event.target===this)closeChannelSettings()" role="dialog" aria-modal="true" aria-labelledby="channel-settings-title">
   <div class="admin-panel">
     <div class="admin-panel-header">
-      <h2>Channel Settings</h2>
-      <button class="admin-panel-close" onclick="closeChannelSettings()">&times;</button>
+      <h2 id="channel-settings-title">Channel Settings</h2>
+      <button class="admin-panel-close" onclick="closeChannelSettings()" aria-label="Close">&times;</button>
     </div>
     <div class="admin-tab-content" id="channel-settings-content">
       <div style="color:var(--text2);font-size:0.8rem;">Loading...</div>
@@ -303,11 +308,11 @@
 </div>
 
 <!-- Admin Panel Overlay -->
-<div class="admin-overlay" id="admin-overlay" onclick="if(event.target===this)closeAdminPanel()">
+<div class="admin-overlay" id="admin-overlay" onclick="if(event.target===this)closeAdminPanel()" role="dialog" aria-modal="true" aria-labelledby="admin-overlay-title">
   <div class="admin-panel">
     <div class="admin-panel-header">
-      <h2>Admin Panel</h2>
-      <button class="admin-panel-close" onclick="closeAdminPanel()">&times;</button>
+      <h2 id="admin-overlay-title">Admin Panel</h2>
+      <button class="admin-panel-close" onclick="closeAdminPanel()" aria-label="Close">&times;</button>
     </div>
     <div class="admin-tabs">
       <button class="active" onclick="switchAdminTab('settings', this)">Settings</button>
@@ -321,11 +326,11 @@
 </div>
 
 <!-- Profile Overlay -->
-<div class="admin-overlay" id="profile-overlay" onclick="if(event.target===this)closeProfile()">
+<div class="admin-overlay" id="profile-overlay" onclick="if(event.target===this)closeProfile()" role="dialog" aria-modal="true" aria-labelledby="profile-overlay-title">
   <div class="admin-panel" style="width:400px;">
     <div class="admin-panel-header">
-      <h2>Profile</h2>
-      <button class="admin-panel-close" onclick="closeProfile()">&times;</button>
+      <h2 id="profile-overlay-title">Profile</h2>
+      <button class="admin-panel-close" onclick="closeProfile()" aria-label="Close">&times;</button>
     </div>
     <div class="admin-tab-content" id="profile-content" data-profile-user="">
     </div>
@@ -333,11 +338,11 @@
 </div>
 
 <!-- User Settings Overlay -->
-<div class="admin-overlay" id="user-settings-overlay" onclick="if(event.target===this)closeUserSettings()">
+<div class="admin-overlay" id="user-settings-overlay" onclick="if(event.target===this)closeUserSettings()" role="dialog" aria-modal="true" aria-labelledby="user-settings-title">
   <div class="admin-panel" style="width:440px;">
     <div class="admin-panel-header">
-      <h2>Settings</h2>
-      <button class="admin-panel-close" onclick="closeUserSettings()">&times;</button>
+      <h2 id="user-settings-title">Settings</h2>
+      <button class="admin-panel-close" onclick="closeUserSettings()" aria-label="Close">&times;</button>
     </div>
     <div class="admin-tab-content" id="user-settings-content">
     </div>
@@ -345,7 +350,7 @@
 </div>
 
 <!-- Notification toast container -->
-<div id="notification-container"></div>
+<div id="notification-container" aria-live="assertive" role="status"></div>
 
 <script src="js/sodium-loader.js"></script>
 <script src="js/tauri-bridge.js"></script>

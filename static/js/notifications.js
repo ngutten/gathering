@@ -30,6 +30,7 @@ function showToast(title, body, channel) {
 
   const toast = document.createElement('div');
   toast.className = 'notification-toast';
+  toast.setAttribute('role', 'alert');
   toast.innerHTML = `<div class="notification-toast-title">${escapeHtml(title)}</div>
     <div class="notification-toast-body">${escapeHtml(body)}</div>`;
   toast.onclick = () => {

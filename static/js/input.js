@@ -61,6 +61,9 @@ export function handleInputKey(e) {
   if (e.key === 'Escape') {
     if (state.editingMessageId) { cancelEdit(); return; }
     if (state.replyTo) { cancelReply(); return; }
+    // Escape blurs the input so Tab can navigate freely
+    e.target.blur();
+    return;
   }
   if (e.key === 'ArrowUp' && !state.editingMessageId) {
     const input = document.getElementById('msg-input');
@@ -75,7 +78,8 @@ export function handleInputKey(e) {
       return;
     }
   }
-  if (e.key === 'Tab') {
+  if (e.key === 'Tab' && e.target.value.includes('\n')) {
+    // Only capture Tab for indentation when composing multi-line content
     e.preventDefault();
     const ta = e.target;
     const start = ta.selectionStart;

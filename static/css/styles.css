@@ -4,6 +4,13 @@
     --green: #3fb950; --red: #f85149; --orange: #d29922;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* Screen-reader only utility */
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+             overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  /* Skip to main content link */
+  .skip-link { position: absolute; top: -40px; left: 0; background: var(--accent2); color: #fff;
+               padding: 0.5rem 1rem; z-index: 999; font-size: 0.85rem; text-decoration: none; }
+  .skip-link:focus { top: 0; }
   body { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
          background: var(--bg); color: var(--text); height: 100vh; height: 100dvh;
          display: flex; overflow: hidden; }
@@ -19,14 +26,18 @@
                     background: var(--bg); border: 1px solid var(--border);
                     border-radius: 4px; color: var(--text); font-family: inherit;
                     font-size: 0.85rem; }
-  .auth-box input:focus { outline: none; border-color: var(--accent); }
+  .auth-box input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
   .auth-buttons { display: flex; gap: 0.5rem; }
   .auth-buttons button { flex: 1; padding: 0.5rem; border: none; border-radius: 4px;
                          font-family: inherit; font-size: 0.85rem; cursor: pointer; }
   .btn-primary { background: var(--accent2); color: #fff; }
   .btn-secondary { background: var(--bg3); color: var(--text); }
-  .btn-primary:hover { background: var(--accent); }
-  .btn-secondary:hover { background: var(--border); }
+  .btn-primary:hover, .btn-primary:focus-visible { background: var(--accent); }
+  .btn-secondary:hover, .btn-secondary:focus-visible { background: var(--border); }
+  /* Global focus-visible for buttons and interactive elements */
+  button:focus-visible, [role="button"]:focus-visible, select:focus-visible, a:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
+  input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
   .auth-error { color: var(--red); font-size: 0.8rem; margin-bottom: 0.5rem;
                 min-height: 1.2rem; }
 
@@ -44,13 +55,13 @@
   .admin-btn { background: none; border: 1px solid var(--border); border-radius: 4px;
                color: var(--text2); cursor: pointer; padding: 0.3rem 0.4rem; font-size: 0.85rem;
                line-height: 1; }
-  .admin-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .admin-btn:hover, .admin-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
   .sidebar-section { padding: 0.5rem 0; }
   .sidebar-section h3 { font-size: 0.7rem; text-transform: uppercase; color: var(--text2);
                         padding: 0.3rem 1rem; letter-spacing: 0.05em; }
   .channel-item { padding: 0.35rem 1rem; font-size: 0.85rem; cursor: pointer;
                   display: flex; justify-content: space-between; align-items: center; }
-  .channel-item:hover { background: var(--bg3); }
+  .channel-item:hover, .channel-item:focus-visible { background: var(--bg3); }
   .channel-item.active { background: var(--bg3); color: var(--accent); }
   .channel-item .count { font-size: 0.7rem; color: var(--text2); }
   .user-item { padding: 0.25rem 1rem; font-size: 0.8rem; color: var(--text2);
@@ -59,7 +70,7 @@
   .join-channel input { width: 100%; padding: 0.3rem 0.5rem; background: var(--bg);
                        border: 1px solid var(--border); border-radius: 3px;
                        color: var(--text); font-family: inherit; font-size: 0.8rem; }
-  .join-channel input:focus { outline: none; border-color: var(--accent); }
+  .join-channel input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
 
   .sidebar-bottom { margin-top: auto; padding: 0.7rem 1rem; border-top: 1px solid var(--border);
                    font-size: 0.7rem; color: var(--text2); }
@@ -75,7 +86,7 @@
   .channel-header-tools { display: flex; gap: 0.15rem; margin-left: 0.3rem; flex-shrink: 0; }
   .ch-tool-btn { background: none; border: none; color: var(--text2); cursor: pointer;
                  padding: 0.15rem 0.3rem; font-size: 0.8rem; line-height: 1; border-radius: 3px; }
-  .ch-tool-btn:hover { color: var(--accent); background: var(--bg3); }
+  .ch-tool-btn:hover, .ch-tool-btn:focus-visible { color: var(--accent); background: var(--bg3); }
   .chat-header-right { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
 
   .messages { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; display: flex;
@@ -113,11 +124,11 @@
   .msg-actions { display: none; position: absolute; top: 0; right: 0; gap: 0.2rem;
                  background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
                  padding: 0.15rem; z-index: 10; }
-  .msg:hover .msg-actions { display: flex; }
+  .msg:hover .msg-actions, .msg:focus-within .msg-actions { display: flex; }
   .msg-actions button { background: none; border: none; color: var(--text2); cursor: pointer;
                         font-size: 0.75rem; padding: 0.15rem 0.3rem; border-radius: 3px;
                         font-family: inherit; }
-  .msg-actions button:hover { background: var(--bg3); color: var(--text); }
+  .msg-actions button:hover, .msg-actions button:focus-visible { background: var(--bg3); color: var(--text); }
   .msg-actions button.del-btn:hover { color: var(--red); }
 
   /* Pinned badge */
@@ -197,7 +208,7 @@
                         border-radius: 6px; color: var(--text); font-family: inherit;
                         font-size: 0.85rem; max-height: 120px; min-height: 38px;
                         line-height: 1.4; }
-  .input-area textarea:focus { outline: none; border-color: var(--accent); }
+  .input-area textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
   .ttl-control { display: flex; align-items: center; gap: 0.3rem; }
   .ttl-control label { font-size: 0.7rem; color: var(--text2); white-space: nowrap; }
   .ttl-control select { background: var(--bg2); border: 1px solid var(--border);
@@ -206,11 +217,11 @@
                        -webkit-appearance: none; appearance: none; }
   .send-btn { padding: 0.5rem 1rem; background: var(--accent2); color: #fff; border: none;
               border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.85rem; }
-  .send-btn:hover { background: var(--accent); }
+  .send-btn:hover, .send-btn:focus-visible { background: var(--accent); }
   .attach-btn { padding: 0.5rem; background: var(--bg3); color: var(--text2); border: 1px solid var(--border);
                 border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 1rem;
                 line-height: 1; display: flex; align-items: center; justify-content: center; }
-  .attach-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .attach-btn:hover, .attach-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
   .pending-files { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
   .pending-file { display: inline-flex; align-items: center; gap: 0.3rem;
                   background: var(--bg3); border: 1px solid var(--border);
@@ -385,7 +396,7 @@
   /* ── DM section ─── */
   .dm-item { padding: 0.35rem 1rem; font-size: 0.85rem; cursor: pointer;
              display: flex; justify-content: space-between; align-items: center; }
-  .dm-item:hover { background: var(--bg3); }
+  .dm-item:hover, .dm-item:focus-visible { background: var(--bg3); }
   .dm-item.active { background: var(--bg3); color: var(--accent); }
   .dm-item .dm-name { display: flex; align-items: center; gap: 0.3rem; }
   .dm-btn { background: none; border: none; color: var(--text2); cursor: pointer;
@@ -450,7 +461,7 @@
                   box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 200; overflow: hidden; }
   .emoji-search { margin: 0.4rem; padding: 0.35rem 0.5rem; background: var(--bg); border: 1px solid var(--border);
                   border-radius: 4px; color: var(--text); font-family: inherit; font-size: 0.8rem; }
-  .emoji-search:focus { outline: none; border-color: var(--accent); }
+  .emoji-search:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
   .emoji-tabs { display: flex; border-bottom: 1px solid var(--border); }
   .emoji-tabs button { flex: 1; padding: 0.3rem; background: none; border: none; cursor: pointer;
                        font-size: 1rem; border-bottom: 2px solid transparent; }
@@ -460,7 +471,7 @@
                 align-content: flex-start; gap: 2px; }
   .emoji-item { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
                 background: none; border: none; border-radius: 4px; cursor: pointer; font-size: 1.2rem; }
-  .emoji-item:hover { background: var(--bg3); }
+  .emoji-item:hover, .emoji-item:focus-visible { background: var(--bg3); }
 
   /* ── Unread indicators ─── */
   .unread-badge { background: var(--accent2); color: #fff; font-size: 0.6rem; font-weight: 700;
@@ -476,7 +487,7 @@
   .files-btn { width: calc(100% - 2rem); margin: 0.3rem 1rem; padding: 0.35rem 0.6rem;
                background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
                color: var(--text2); font-family: inherit; font-size: 0.75rem; cursor: pointer; }
-  .files-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .files-btn:hover, .files-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
   .quota-info { margin-bottom: 0.8rem; }
   .quota-label { font-size: 0.8rem; color: var(--text2); margin-bottom: 0.3rem; }
   .quota-bar { width: 100%; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
@@ -499,7 +510,7 @@
   .search-toggle-btn { background: none; border: 1px solid var(--border); border-radius: 4px;
                        color: var(--text2); cursor: pointer; padding: 0.2rem 0.4rem; font-size: 0.8rem;
                        line-height: 1; }
-  .search-toggle-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .search-toggle-btn:hover, .search-toggle-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
   .request-key-btn { background: none; border: 1px solid var(--orange); border-radius: 4px;
                      color: var(--orange); cursor: pointer; padding: 0.2rem 0.5rem; font-size: 0.7rem;
                      font-family: inherit; line-height: 1; margin-left: 0.3rem; }

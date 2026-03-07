@@ -4,16 +4,27 @@ import state from './state.js';
 import { send, apiFetch } from './transport.js';
 import { escapeHtml, formatFileSize } from './render.js';
 
+let _filesPrevFocus = null;
+
 export function openFileManager() {
+  _filesPrevFocus = document.activeElement;
   state.fileManagerOpen = true;
   send('ListMyFiles');
   const overlay = document.getElementById('files-overlay');
   overlay.classList.add('active');
+  requestAnimationFrame(() => {
+    const focusable = overlay.querySelector('button, input, select, textarea');
+    if (focusable) focusable.focus();
+  });
 }
 
 export function closeFileManager() {
   state.fileManagerOpen = false;
   document.getElementById('files-overlay').classList.remove('active');
+  if (_filesPrevFocus && _filesPrevFocus.focus) {
+    _filesPrevFocus.focus();
+    _filesPrevFocus = null;
+  }
 }
 
 export function handleMyFileList(msg) {
