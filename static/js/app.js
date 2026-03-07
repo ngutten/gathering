@@ -172,6 +172,53 @@ window.radioLoadTopicFiles = radioLoadTopicFiles;
 window.radioClearTopicFiles = radioClearTopicFiles;
 window.radioPlayTopicFiles = radioPlayTopicFiles;
 
+// ── Mobile back button: navigate channel history, confirm before leaving ──
+// Set initial history state so the first back press triggers popstate
+try { history.replaceState({ channel: state.currentChannel, view: 'chat' }, '', ''); } catch(e) {}
+
+window.addEventListener('popstate', (e) => {
+  if (state.channelHistory.length > 0) {
+    const entry = state.channelHistory.pop();
+    state._skipHistoryPush = true;
+    if (entry.type === 'view') {
+      // Restore view within the same channel
+      if (entry.view === 'thread' && entry.topicId) {
+        import('./topics.js').then(m => { state._skipHistoryPush = true; m.openTopic(entry.topicId); });
+      } else if (entry.view === 'topics') {
+        import('./topics.js').then(m => { state._skipHistoryPush = true; m.switchView('topics'); });
+      } else {
+        import('./topics.js').then(m => { state._skipHistoryPush = true; m.switchView('chat'); });
+      }
+    } else {
+      // Channel switch — restore channel and its view
+      switchChannel(entry.channel);
+      if (entry.view && entry.view !== 'chat') {
+        import('./topics.js').then(m => {
+          state._skipHistoryPush = true;
+          if (entry.view === 'thread' && entry.topicId) {
+            m.openTopic(entry.topicId);
+          } else {
+            m.switchView(entry.view);
+          }
+        });
+      }
+    }
+  } else {
+    // No more history — user is about to leave the app.
+    // Push a dummy state to keep them on the page and confirm.
+    history.pushState({ channel: state.currentChannel, view: state.currentView }, '', '');
+    if (!confirm('Leave Gathering?')) return;
+    // Actually leave: go back twice (past the dummy state we just pushed)
+    history.go(-2);
+  }
+});
+
+window.addEventListener('beforeunload', (e) => {
+  e.preventDefault();
+  // Returning a string is ignored by modern browsers but triggers the dialog
+  e.returnValue = '';
+});
+
 // ── Initialize ──
 initContextMenu();
 setupDragAndDrop();

@@ -79,6 +79,10 @@ const state = {
   usedBytes: 0,
   quotaBytes: 0,
 
+  // Navigation history (for mobile back button)
+  channelHistory: [],
+  _skipHistoryPush: false,
+
   // Search state
   searchOpen: false,
   searchResults: [],

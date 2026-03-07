@@ -6,6 +6,8 @@ import { tryEncrypt, tryDecrypt } from './crypto.js';
 import { escapeHtml, renderRichContent, formatFileSize, formatTimeAgo, renderTtlBadge, renderEncryptedBadge, renderAttachmentsHtml, decryptAndRenderAttachments, isImageMime, isAudioMime, isVideoMime } from './render.js';
 
 export function switchView(view) {
+  const prevView = state.currentView;
+  const prevTopicId = state.currentTopicId;
   state.currentView = view;
   document.getElementById('chat-view').style.display = (view === 'chat') ? 'flex' : 'none';
   document.getElementById('topics-view').style.display = (view === 'topics') ? 'flex' : 'none';
@@ -15,6 +17,12 @@ export function switchView(view) {
   if (view === 'topics') {
     send('ListTopics', { channel: state.currentChannel, limit: 50 });
   }
+  // Push history for view transitions (unless triggered by back button)
+  if (!state._skipHistoryPush && prevView !== view) {
+    state.channelHistory.push({ type: 'view', channel: state.currentChannel, view: prevView, topicId: prevTopicId });
+    try { history.pushState({ channel: state.currentChannel, view, topicId: state.currentTopicId }, '', ''); } catch(e) {}
+  }
+  state._skipHistoryPush = false;
 }
 
 export function renderTopicList(topics) {

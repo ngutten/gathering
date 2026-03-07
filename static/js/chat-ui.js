@@ -588,8 +588,17 @@ export function removeChannelMember(channel, username) {
 }
 
 export function switchChannel(name) {
+  const prev = state.currentChannel;
+  const prevView = state.currentView;
+  const prevTopicId = state.currentTopicId;
   state.currentChannel = name;
   state.currentTopicId = null;
+  // Track channel navigation for browser back button
+  if (!state._skipHistoryPush && (prev !== name || prevView !== 'chat')) {
+    state.channelHistory.push({ type: 'channel', channel: prev, view: prevView, topicId: prevTopicId });
+    try { history.pushState({ channel: name, view: 'chat' }, '', ''); } catch(e) {}
+  }
+  state._skipHistoryPush = false;
   state.topicsList = [];
   // Clear unread for this channel
   state.unreadCounts[name] = 0;
@@ -623,7 +632,8 @@ export function switchChannel(name) {
   const widgetBtn = document.getElementById('widget-toolbar-btn');
   if (widgetBtn) widgetBtn.style.display = state.encryptedChannels.has(name) ? 'none' : '';
   // Import switchView dynamically to avoid circular deps
-  import('./topics.js').then(m => m.switchView('chat'));
+  // Suppress history push — the channel switch already recorded it
+  import('./topics.js').then(m => { state._skipHistoryPush = true; m.switchView('chat'); });
   // Always send Join — server is idempotent (skips broadcast if already joined)
   // and responds with history + channel key delivery
   send('Join', { channel: name });
