@@ -7,6 +7,19 @@ const MAX_WIDGET_DATA_SIZE: usize = 64 * 1024; // 64KB
 const MAX_WIDGET_STATE_SIZE: usize = 512 * 1024; // 512KB for persisted state
 
 impl Hub {
+    /// Check if a widget ID is allowed by the server config.
+    /// `_meta` (presence) is always allowed. `None` in config = all allowed.
+    fn is_widget_enabled(&self, widget_id: &str) -> bool {
+        if widget_id == "_meta" {
+            return true;
+        }
+        let config = self.config.read().unwrap_or_else(|e| e.into_inner());
+        match &config.enabled_widgets {
+            None => true,
+            Some(list) => list.iter().any(|w| w == widget_id),
+        }
+    }
+
     pub(super) async fn handle_widget_message(
         &self,
         id: usize,
@@ -26,6 +39,11 @@ impl Hub {
         }
         if serde_json::to_string(&data).map_or(true, |s| s.len() > MAX_WIDGET_DATA_SIZE) {
             self.send_error(id, "Widget data too large (max 64KB)").await;
+            return;
+        }
+
+        if !self.is_widget_enabled(&widget_id) {
+            self.send_error(id, "This widget is not enabled on this server").await;
             return;
         }
 
@@ -71,6 +89,11 @@ impl Hub {
             return;
         }
 
+        if !self.is_widget_enabled(&widget_id) {
+            self.send_error(id, "This widget is not enabled on this server").await;
+            return;
+        }
+
         if self.db.is_channel_encrypted(&channel) {
             self.send_error(id, "Widgets are not supported on encrypted channels").await;
             return;
@@ -112,6 +135,11 @@ impl Hub {
     ) {
         if widget_id.len() > MAX_WIDGET_ID_LEN {
             self.send_error(id, "Widget ID too long").await;
+            return;
+        }
+
+        if !self.is_widget_enabled(&widget_id) {
+            self.send_error(id, "This widget is not enabled on this server").await;
             return;
         }
 

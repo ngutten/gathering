@@ -14,20 +14,11 @@ pub fn ensure_tls(data_dir: &Path) {
     tracing::info!("Generating self-signed TLS certificate...");
 
     let san_names: Vec<String> = vec!["localhost".to_string()];
-    let mut san_ips: Vec<IpAddr> = vec!["127.0.0.1".parse().unwrap()];
+    let san_ips: Vec<IpAddr> = vec!["127.0.0.1".parse().unwrap()];
 
-    // Detect local LAN IP via UDP socket trick
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(addr) = socket.local_addr() {
-                let ip = addr.ip();
-                if !san_ips.contains(&ip) {
-                    tracing::info!("Detected local IP: {}, adding to certificate SANs", ip);
-                    san_ips.push(ip);
-                }
-            }
-        }
-    }
+    // Note: LAN IP detection deliberately omitted from certificate SANs
+    // to avoid embedding identifying network information in the cert.
+    // If you need LAN IP access, provide your own cert.pem and key.pem.
 
     let mut params = rcgen::CertificateParams::new(san_names);
     for ip in san_ips {

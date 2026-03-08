@@ -109,6 +109,16 @@ async fn main() {
     }
     tracing::info!("Seeded {} default roles", config.default_roles.len());
 
+    // Seed DB settings from config.json so they stay in sync
+    let _ = db.set_setting("registration_mode", &config.registration_mode);
+    let _ = db.set_setting("channel_creation", &config.channel_creation);
+    if let Some(ref name) = config.server_name {
+        let _ = db.set_setting("server_name", name);
+    }
+    if let Some(ref icon) = config.server_icon {
+        let _ = db.set_setting("server_icon", icon);
+    }
+
     // Backfill existing users who have no roles
     db.backfill_user_roles();
 
@@ -122,7 +132,7 @@ async fn main() {
     let config_port = config.port;
     let config_http_port = config.http_port;
 
-    let hub = Hub::new(db.clone(), data_dir.clone());
+    let hub = Hub::new(db.clone(), data_dir.clone(), config.clone());
     let state = Arc::new(AppState {
         hub,
         db: db.clone(),
@@ -292,9 +302,8 @@ async fn handle_server_info(
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
     let mode = state.db.get_setting("registration_mode").unwrap_or_else(|| "open".to_string());
-    // DB settings override config.json for name/icon
-    let server_name = state.db.get_setting("server_name").or_else(|| state.config.server_name.clone());
-    let server_icon = state.db.get_setting("server_icon").or_else(|| state.config.server_icon.clone());
+    let server_name = state.db.get_setting("server_name");
+    let server_icon = state.db.get_setting("server_icon");
     Json(ServerInfoResponse {
         registration_mode: mode,
         server_name,
@@ -365,7 +374,7 @@ async fn handle_register(
 
     match state.db.register(&req.username, &req.password) {
         Ok(()) => {
-            tracing::info!("Registered user: {}", req.username);
+            tracing::info!("New user registered");
 
             // Assign default "user" role
             if let Err(e) = state.db.assign_role(&req.username, "user") {
@@ -377,7 +386,7 @@ async fn handle_register(
                 if let Err(e) = state.db.assign_role(&req.username, "admin") {
                     eprintln!("[main] auto-assign admin role on register failed: {e}");
                 }
-                tracing::info!("Auto-assigned admin role to: {}", req.username);
+                tracing::info!("Auto-assigned admin role on registration");
             }
 
             // Mark invite code as used
@@ -419,7 +428,7 @@ async fn handle_login(
 
     match state.db.login(&req.username, &req.password) {
         Ok(token) => {
-            tracing::info!("Login: {}", req.username);
+            tracing::info!("User logged in");
             (StatusCode::OK, Json(AuthResponse {
                 ok: true, token: Some(token), error: None,
             }))
@@ -481,7 +490,7 @@ async fn handle_backup(
         .and_then(|n| n.to_str())
         .unwrap_or("backup.db");
 
-    tracing::info!("Database backup created by {}: {}", username, filename);
+    tracing::info!("Database backup created: {}", filename);
 
     Ok((
         StatusCode::OK,
@@ -636,8 +645,16 @@ async fn handle_upload(
         }));
     }
 
+    // For encrypted uploads, strip the original filename from server storage
+    // to avoid leaking identifying metadata. The client handles display names.
+    let stored_filename = if encrypted {
+        format!("{}.{}", file_id, ext)
+    } else {
+        filename.clone()
+    };
+
     let size = data.len() as i64;
-    state.db.store_file(&file_id, &filename, size, &mime_type, &username, &channel, encrypted);
+    state.db.store_file(&file_id, &stored_filename, size, &mime_type, &username, &channel, encrypted);
 
     let info = FileInfo {
         id: file_id,
@@ -648,7 +665,7 @@ async fn handle_upload(
         encrypted,
     };
 
-    tracing::info!("File uploaded: {} by {}", info.filename, username);
+    tracing::info!("File uploaded ({} bytes)", info.size);
 
     (StatusCode::OK, Json(UploadResponse {
         ok: true, file: Some(info), error: None,

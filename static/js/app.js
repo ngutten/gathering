@@ -243,6 +243,74 @@ on('server-message', (msg) => {
   }
 });
 
+// ── Service Worker: code integrity monitoring ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(e => {
+    console.warn('[sw] registration failed:', e);
+  });
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data.type === 'integrity-violation') {
+      showIntegrityWarning(event.data.path, event.data.expected, event.data.actual);
+    }
+  });
+}
+
+function showIntegrityWarning(path, expected, actual) {
+  // Avoid duplicate warnings
+  if (document.getElementById('integrity-warning')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'integrity-warning';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg2,#1a1a2e);border:2px solid #e74c3c;border-radius:8px;padding:1.5rem;max-width:500px;width:90%;color:var(--text,#eee);font-family:monospace;';
+  box.innerHTML = `
+    <h3 style="margin:0 0 0.75rem 0;color:#e74c3c;font-size:1.1rem;">Code Integrity Warning</h3>
+    <p style="font-size:0.85rem;margin:0 0 0.75rem 0;">
+      The file <code style="background:var(--bg,#111);padding:0.1rem 0.3rem;border-radius:3px;">${path}</code>
+      has changed since you first loaded this client.
+    </p>
+    <p style="font-size:0.8rem;color:#e74c3c;margin:0 0 0.75rem 0;">
+      This could mean the server code was updated legitimately, or it could indicate the server has been compromised
+      and is serving modified code to exfiltrate encryption keys.
+    </p>
+    <div style="font-size:0.7rem;color:var(--text2,#999);margin-bottom:1rem;">
+      <div>Expected: <code>${expected}</code></div>
+      <div>Received: <code>${actual}</code></div>
+    </div>
+    <p style="font-size:0.8rem;margin:0 0 1rem 0;">
+      If you did not expect a server update, do <strong>not</strong> accept.
+      Verify with your server admin before continuing.
+    </p>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap;">
+      <button id="integrity-accept-btn" style="padding:0.4rem 1rem;background:var(--bg3,#333);border:1px solid var(--border,#555);border-radius:4px;color:var(--text2,#999);cursor:pointer;font-family:inherit;font-size:0.8rem;">Accept Update</button>
+      <button id="integrity-accept-all-btn" style="padding:0.4rem 1rem;background:var(--bg3,#333);border:1px solid var(--border,#555);border-radius:4px;color:var(--text2,#999);cursor:pointer;font-family:inherit;font-size:0.8rem;">Accept All Updates</button>
+      <button id="integrity-reject-btn" style="padding:0.4rem 1rem;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.8rem;">Close Page</button>
+    </div>
+  `;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  document.getElementById('integrity-reject-btn').addEventListener('click', () => {
+    window.close();
+    // If window.close() doesn't work (not opened by script), navigate away
+    location.href = 'about:blank';
+  });
+  document.getElementById('integrity-accept-btn').addEventListener('click', () => {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'accept-update', path, hash: actual,
+      });
+    }
+    overlay.remove();
+  });
+  document.getElementById('integrity-accept-all-btn').addEventListener('click', () => {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'accept-update' });
+    }
+    overlay.remove();
+  });
+}
+
 // ── Initialize ──
 initContextMenu();
 setupDragAndDrop();

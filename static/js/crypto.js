@@ -1,6 +1,6 @@
 // crypto.js — E2E encryption: key management, encrypt/decrypt, key approval UI
 
-import state, { emit } from './state.js';
+import state, { emit, serverHas } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
 import { scopedGet, scopedSet, scopedRemove } from './storage.js';
@@ -74,8 +74,8 @@ export async function initE2E() {
     state.e2eReady = true;
     send('UploadPublicKey', { public_key: sodium.to_base64(state.myKeyPair.publicKey) });
   }
-  // If no key exists, check for a server-side backup
-  if (!state.myKeyPair) {
+  // If no key exists, check for a server-side backup (if server allows it)
+  if (!state.myKeyPair && serverHas('key_backup')) {
     send('GetKeyBackup', {});
   }
   updateKeyUI();
@@ -225,6 +225,9 @@ export function updateKeyUI() {
   if (noKeyLabel) noKeyLabel.style.display = hasKey ? 'none' : '';
   if (hasKeySection) hasKeySection.style.display = hasKey ? '' : 'none';
   if (noKeySection) noKeySection.style.display = hasKey ? 'none' : '';
+  // Hide Sync button if server disables key backup
+  const syncBtn = document.querySelector('[onclick="setupKeySync()"]');
+  if (syncBtn) syncBtn.style.display = serverHas('key_backup') ? '' : 'none';
   // Update channel list styling for encrypted channels
   renderEncryptedChannelStates();
 }
@@ -436,6 +439,10 @@ export function decryptKeyFromBackup(passphrase, backupData) {
 }
 
 export function setupKeySync() {
+  if (!serverHas('key_backup')) {
+    emit('system-message', 'Key backup is disabled on this server. Export your key manually to back it up.');
+    return;
+  }
   // Create overlay
   const overlay = document.createElement('div');
   overlay.id = 'key-sync-overlay';

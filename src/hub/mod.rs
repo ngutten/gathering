@@ -13,11 +13,11 @@ mod widgets;
 
 use axum::extract::ws::Message;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::db::Db;
-use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg, PROTOCOL_VERSION, SERVER_CAPABILITIES};
+use crate::protocol::{ChannelInfo, ClientMsg, ServerConfig, ServerMsg, PROTOCOL_VERSION, build_capabilities};
 use std::path::PathBuf;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 100;
@@ -45,15 +45,17 @@ pub struct Hub {
     pub(super) db: Arc<Db>,
     next_id: Mutex<usize>,
     pub(super) data_dir: PathBuf,
+    pub(super) config: RwLock<ServerConfig>,
 }
 
 impl Hub {
-    pub fn new(db: Arc<Db>, data_dir: PathBuf) -> Self {
+    pub fn new(db: Arc<Db>, data_dir: PathBuf, config: ServerConfig) -> Self {
         Hub {
             clients: Mutex::new(HashMap::new()),
             db,
             next_id: Mutex::new(0),
             data_dir,
+            config: RwLock::new(config),
         }
     }
 
@@ -207,7 +209,7 @@ impl Hub {
                 }
 
                 let result = self.authenticate(id, &token).await;
-                let capabilities: Vec<String> = SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect();
+                let capabilities = build_capabilities(&self.config.read().unwrap_or_else(|e| e.into_inner()));
                 let clients = self.clients.lock().await;
                 if let Some(client) = clients.get(&id) {
                     let resp = match result {
@@ -426,10 +428,29 @@ impl Hub {
             }
 
             ClientMsg::SetKeyBackup { encrypted_key, salt, nonce, ops_limit, mem_limit } => {
-                self.handle_set_key_backup(id, encrypted_key, salt, nonce, ops_limit, mem_limit).await;
+                let allowed = self.config.read().unwrap_or_else(|e| e.into_inner()).allow_key_backup;
+                if !allowed {
+                    self.send_error(id, "Key backup is disabled on this server").await;
+                } else {
+                    self.handle_set_key_backup(id, encrypted_key, salt, nonce, ops_limit, mem_limit).await;
+                }
             }
-            ClientMsg::GetKeyBackup => { self.handle_get_key_backup(id).await; }
-            ClientMsg::DeleteKeyBackup => { self.handle_delete_key_backup(id).await; }
+            ClientMsg::GetKeyBackup => {
+                let allowed = self.config.read().unwrap_or_else(|e| e.into_inner()).allow_key_backup;
+                if !allowed {
+                    self.send_msg(id, &ServerMsg::NoKeyBackup).await;
+                } else {
+                    self.handle_get_key_backup(id).await;
+                }
+            }
+            ClientMsg::DeleteKeyBackup => {
+                let allowed = self.config.read().unwrap_or_else(|e| e.into_inner()).allow_key_backup;
+                if !allowed {
+                    self.send_error(id, "Key backup is disabled on this server").await;
+                } else {
+                    self.handle_delete_key_backup(id).await;
+                }
+            }
 
             ClientMsg::SearchMessages { query, channel, from, date_start, date_end, mentions } => {
                 self.handle_search_messages(id, query, channel, from, date_start, date_end, mentions).await;
@@ -564,11 +585,11 @@ impl Hub {
 
     /// Broadcast per-user filtered channel lists to all authenticated clients
     pub(super) fn broadcast_channel_lists(&self, clients: &HashMap<usize, Client>) {
-        for (_, client) in clients {
+        for (&cid, client) in clients {
             if client.username.is_empty() { continue; }
             let channels = self.channel_list_for_user(clients, Some(&client.username));
             if let Err(e) = Self::send_to(&client.tx, &ServerMsg::ChannelList { channels }) {
-                eprintln!("[hub] broadcast channel list to user {} failed: {e:?}", client.username);
+                eprintln!("[hub] broadcast channel list to client {} failed: {e:?}", cid);
             }
         }
     }

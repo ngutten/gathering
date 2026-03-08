@@ -1,6 +1,6 @@
 // widget-api.js -- Base class, registry, and widget panel manager
 
-import state from '../state.js';
+import state, { serverHas } from '../state.js';
 import { send as transportSend } from '../transport.js';
 
 // ── Base class ──
@@ -89,12 +89,20 @@ export function getActiveWidgets(channel) {
   return activeWidgets[channel] || {};
 }
 
+/** Check if a widget is enabled on this server. */
+function isWidgetEnabled(widgetId) {
+  // "widgets" in capabilities = all widgets allowed (or old server with no caps)
+  if (serverHas('widgets')) return true;
+  // Otherwise check for specific "widget:<id>" capability
+  return state.serverCapabilities.includes(`widget:${widgetId}`);
+}
+
 export function getChannelPresence(channel) {
   return channelPresence[channel] || {};
 }
 
 export function activateWidget(channel, widgetId) {
-  if (!registry[widgetId]) return;
+  if (!registry[widgetId] || !isWidgetEnabled(widgetId)) return;
   if (!activeWidgets[channel]) activeWidgets[channel] = {};
   if (activeWidgets[channel][widgetId]) return; // already active
 
@@ -301,6 +309,7 @@ function renderWidgetPicker() {
 
   let html = '';
   for (const [id, info] of Object.entries(registry)) {
+    if (!isWidgetEnabled(id)) continue;
     const localActive = !!channelWidgets[id];
     const remoteUsers = presence[id] ? [...presence[id]].filter(u => u !== state.currentUser) : [];
     const hasRemote = remoteUsers.length > 0;
@@ -343,6 +352,9 @@ function updateWidgetToolbar() {
 
   const btn = document.getElementById('widget-toolbar-btn');
   if (btn) {
+    // Hide the button entirely if no widgets are enabled
+    const anyEnabled = Object.keys(registry).some(id => isWidgetEnabled(id));
+    btn.style.display = anyEnabled ? '' : 'none';
     btn.classList.toggle('active', localCount > 0);
     btn.classList.toggle('in-use', remoteWidgetIds.size > 0 && localCount === 0);
 

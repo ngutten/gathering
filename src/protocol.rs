@@ -10,11 +10,29 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Coarse-grained feature areas this server supports.
 /// Clients can check these to hide UI for unsupported features.
+/// Base capabilities always advertised.
 pub const SERVER_CAPABILITIES: &[&str] = &[
     "chat", "voice", "topics", "reactions", "pins", "search",
     "e2e", "files", "roles", "dms", "profiles", "widgets",
     "channel_access",
 ];
+
+/// Build the capabilities list, conditionally including optional features.
+pub fn build_capabilities(config: &ServerConfig) -> Vec<String> {
+    let mut caps: Vec<String> = SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect();
+    if config.allow_key_backup {
+        caps.push("key_backup".to_string());
+    }
+    // Advertise which widgets are enabled. `None` = all (blanket "widgets" already in base caps).
+    // `Some(list)` = replace blanket with specific `widget:<id>` entries.
+    if let Some(ref enabled) = config.enabled_widgets {
+        caps.retain(|c| c != "widgets");
+        for wid in enabled {
+            caps.push(format!("widget:{wid}"));
+        }
+    }
+    caps
+}
 
 // ── Reply-to reference ──────────────────────────────────────────────
 
@@ -527,10 +545,23 @@ pub struct ServerConfig {
     pub server_name: Option<String>,
     #[serde(default)]
     pub server_icon: Option<String>,
+    #[serde(default = "ServerConfig::default_allow_key_backup")]
+    pub allow_key_backup: bool,
+    #[serde(default = "ServerConfig::default_registration_mode")]
+    pub registration_mode: String,
+    #[serde(default = "ServerConfig::default_channel_creation")]
+    pub channel_creation: String,
+    /// Which widgets are enabled. `null` (default) = all widgets allowed.
+    /// An empty list disables all widgets. A non-empty list enables only those widget IDs.
+    #[serde(default)]
+    pub enabled_widgets: Option<Vec<String>>,
 }
 
 impl ServerConfig {
     fn default_port() -> u16 { 9123 }
+    fn default_allow_key_backup() -> bool { true }
+    fn default_registration_mode() -> String { "open".to_string() }
+    fn default_channel_creation() -> String { "all".to_string() }
 }
 
 impl Default for ServerConfig {
@@ -554,6 +585,10 @@ impl Default for ServerConfig {
             default_roles,
             server_name: None,
             server_icon: None,
+            allow_key_backup: Self::default_allow_key_backup(),
+            registration_mode: Self::default_registration_mode(),
+            channel_creation: Self::default_channel_creation(),
+            enabled_widgets: None,
         }
     }
 }

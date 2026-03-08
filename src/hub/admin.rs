@@ -2,6 +2,21 @@ use super::Hub;
 use crate::protocol::ServerMsg;
 
 impl Hub {
+    /// Write the current in-memory config back to config.json.
+    /// Called after admin setting changes so the file stays in sync.
+    fn save_config_to_disk(&self) {
+        let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let path = self.data_dir.join("config.json");
+        match serde_json::to_string_pretty(&config) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    eprintln!("[hub::admin] failed to write config.json: {e}");
+                }
+            }
+            Err(e) => eprintln!("[hub::admin] failed to serialize config: {e}"),
+        }
+    }
+
     pub(super) async fn handle_delete_channel(&self, id: usize, channel: String) {
         let mut clients = self.clients.lock().await;
         let username = match clients.get(&id) {
@@ -106,6 +121,19 @@ impl Hub {
             }
             return;
         }
+
+        // Update in-memory config and persist to config.json
+        {
+            let mut config = self.config.write().unwrap_or_else(|e| e.into_inner());
+            match key.as_str() {
+                "registration_mode" => config.registration_mode = value,
+                "channel_creation" => config.channel_creation = value,
+                "server_name" => config.server_name = if value.is_empty() { None } else { Some(value) },
+                "server_icon" => config.server_icon = if value.is_empty() { None } else { Some(value) },
+                _ => {}
+            }
+        }
+        self.save_config_to_disk();
 
         let settings = self.db.get_settings();
         if let Some(client) = clients.get(&id) {

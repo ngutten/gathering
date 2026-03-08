@@ -58,12 +58,14 @@ impl Db {
 
     /// Atomically validate and consume an invite code. Returns error if code
     /// is invalid or was already used (prevents TOCTOU race).
-    pub fn use_invite(&self, code: &str, username: &str) -> Result<(), String> {
+    /// Note: used_by is set to "(used)" rather than the actual username to avoid
+    /// building a social graph of who invited whom.
+    pub fn use_invite(&self, code: &str, _username: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().to_rfc3339();
         let rows = conn.execute(
-            "UPDATE invite_codes SET used_by = ?2, used_at = ?3 WHERE code = ?1 AND used_by IS NULL",
-            params![code, username, now],
+            "UPDATE invite_codes SET used_by = '(used)', used_at = ?2 WHERE code = ?1 AND used_by IS NULL",
+            params![code, now],
         ).map_err(|e| e.to_string())?;
         if rows == 0 {
             return Err("Invite code is invalid or already used".into());

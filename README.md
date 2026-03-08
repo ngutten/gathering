@@ -25,6 +25,10 @@ Environment variables:
 | `GATHERING_DATA` | `./gathering-data` | Data directory path |
 | `RUST_LOG` | `gathering=info` | Log level |
 
+Place a `config.json` in the data directory to configure admin accounts, roles, server branding, and security options. Runtime settings (registration mode, server name/icon) are managed through the admin panel.
+
+See [CONFIGURATION.md](CONFIGURATION.md) for the full reference.
+
 ## Data directory
 
 All server state lives in a single portable directory:
@@ -54,6 +58,10 @@ Back up by copying this directory. Migrate by moving it to another machine.
 For production, either:
 1. Place `cert.pem` and `key.pem` in the data directory
 2. Use a reverse proxy (nginx, caddy) for TLS termination — recommended
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the E2E encryption guide — what it protects, what it doesn't, and recommendations for users and server admins.
 
 ## Architecture
 
