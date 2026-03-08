@@ -523,6 +523,10 @@ pub struct ServerConfig {
     pub admins: Vec<String>,
     #[serde(default)]
     pub default_roles: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub server_name: Option<String>,
+    #[serde(default)]
+    pub server_icon: Option<String>,
 }
 
 impl ServerConfig {
@@ -548,6 +552,8 @@ impl Default for ServerConfig {
             http_port: None,
             admins: vec![],
             default_roles,
+            server_name: None,
+            server_icon: None,
         }
     }
 }
@@ -584,6 +590,10 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize)]
 pub struct ServerInfoResponse {
     pub registration_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_icon: Option<String>,
 }
 
 // ── Helper constructors ─────────────────────────────────────────────

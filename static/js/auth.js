@@ -4,6 +4,7 @@ import state from './state.js';
 import { apiUrl } from './config.js';
 import { connectWS } from './transport.js';
 import { apiFetch } from './transport.js';
+import { scopedSet, scopedRemove } from './storage.js';
 
 export async function checkServerInfo() {
   try {
@@ -22,6 +23,13 @@ export async function checkServerInfo() {
       regBtn.style.display = '';
       inviteInput.style.display = 'none';
     }
+    // Store server branding for use by tauri-bridge and UI
+    state.serverName = data.server_name || null;
+    state.serverIcon = data.server_icon || null;
+    // Update auth screen server info if available
+    if (window._updateAuthServerInfo) window._updateAuthServerInfo();
+    // Update server rail icon if available
+    if (window._renderServerRail) window._renderServerRail();
   } catch (e) {}
 }
 
@@ -48,7 +56,7 @@ export async function doAuth(endpoint) {
     const data = await res.json();
     if (data.ok && data.token) {
       state.token = data.token;
-      localStorage.setItem('gathering_token', data.token);
+      scopedSet('token', data.token);
       connectWS();
     } else {
       errEl.textContent = data.error || 'Auth failed';
@@ -66,7 +74,7 @@ export async function doLogout() {
   try {
     await apiFetch('/api/logout', { method: 'POST' });
   } catch (e) {}
-  localStorage.removeItem('gathering_token');
+  scopedRemove('token');
   state.token = null;
   if (state.ws) {
     state.ws.onclose = null; // prevent auto-reconnect

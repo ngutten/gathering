@@ -1,6 +1,6 @@
 // app.js — Entry point: imports all modules, wires events, auto-connects
 
-import state, { on } from './state.js';
+import state, { on, snapshotState, restoreState, resetState } from './state.js';
 import { connectWS } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
@@ -223,6 +223,24 @@ window.addEventListener('beforeunload', (e) => {
   e.preventDefault();
   // Returning a string is ignored by modern browsers but triggers the dialog
   e.returnValue = '';
+});
+
+// ── Expose state + helpers for tauri-bridge.js (classic script) ──
+window._gatheringState = state;
+window._snapshotState = snapshotState;
+window._restoreState = restoreState;
+window._resetState = resetState;
+window._connectWS = connectWS;
+window._cleanupVoice = cleanupVoice;
+window._checkServerInfo = checkServerInfo;
+import { clearUserPresence } from './widgets/widget-api.js';
+window._clearUserPresence = clearUserPresence;
+
+// Re-render server rail after auth success (to update login indicator)
+on('server-message', (msg) => {
+  if (msg.type === 'AuthResult' && msg.ok && window._renderServerRail) {
+    window._renderServerRail();
+  }
 });
 
 // ── Initialize ──

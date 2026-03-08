@@ -11,11 +11,15 @@
 <body>
 <a href="#msg-input" class="skip-link">Skip to message input</a>
 
+<!-- Server Rail (outside both screens so it's always visible in Tauri mode) -->
+<div id="server-rail" class="server-rail"></div>
+
 <!-- Auth Screen -->
 <div id="auth-screen" role="region" aria-label="Authentication">
   <div class="auth-box">
     <h1>&#x2381; Gathering</h1>
     <p>self-hosted &middot; encrypted &middot; ephemeral</p>
+    <div class="auth-server-info" id="auth-server-info"></div>
     <div class="auth-error" id="auth-error" role="alert" aria-live="polite"></div>
     <label for="username" class="sr-only">Username</label>
     <input type="text" id="username" placeholder="username" autocomplete="username">

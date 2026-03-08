@@ -65,6 +65,21 @@ export function renderAdminSettings(settings) {
       </select>
     </div>
     <div class="admin-field" style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem;">
+      <label>Server Name</label>
+      <div style="display:flex;gap:0.3rem;">
+        <input type="text" id="server-name-input" placeholder="My Server" value="${escapeHtml(settings.server_name || '')}" style="flex:1;">
+        <button class="admin-btn-sm" onclick="updateSetting('server_name', document.getElementById('server-name-input').value)">Save</button>
+      </div>
+    </div>
+    <div class="admin-field">
+      <label>Server Icon URL</label>
+      <div style="display:flex;gap:0.3rem;">
+        <input type="text" id="server-icon-input" placeholder="/api/files/... or https://..." value="${escapeHtml(settings.server_icon || '')}" style="flex:1;">
+        <button class="admin-btn-sm" onclick="updateSetting('server_icon', document.getElementById('server-icon-input').value)">Save</button>
+      </div>
+      <div style="font-size:0.65rem;color:var(--text2);margin-top:0.2rem;">Upload an image via Files, then paste its URL here.</div>
+    </div>
+    <div class="admin-field" style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem;">
       <label>Delete Channel</label>
       <div style="display:flex;gap:0.3rem;">
         <input type="text" id="delete-channel-input" placeholder="channel name">

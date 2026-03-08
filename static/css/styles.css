@@ -17,7 +17,18 @@
 
   /* ── Auth screen ─── */
   #auth-screen { display: flex; align-items: center; justify-content: center;
-                  width: 100%; height: 100%; }
+                  flex: 1; height: 100%; }
+  .auth-server-info {
+    font-size: 0.75rem; color: var(--text2); margin-bottom: 0.7rem;
+    display: flex; align-items: center; gap: 0.4rem;
+  }
+  .auth-server-info:empty { display: none; }
+  .auth-server-info .server-name { color: var(--accent); font-weight: 500; }
+  .auth-server-info .server-change {
+    color: var(--text2); cursor: pointer; font-size: 0.7rem;
+    text-decoration: underline; margin-left: auto;
+  }
+  .auth-server-info .server-change:hover { color: var(--accent); }
   .auth-box { background: var(--bg2); border: 1px solid var(--border);
               border-radius: 8px; padding: 2rem; width: 340px; }
   .auth-box h1 { font-size: 1.4rem; margin-bottom: 0.3rem; color: var(--accent); }
@@ -42,8 +53,59 @@
                 min-height: 1.2rem; }
 
   /* ── Chat layout ─── */
-  #chat-screen { display: none; width: 100%; height: 100%; }
-  .layout { display: flex; height: 100%; width: 100%; }
+  #chat-screen { display: none; flex: 1; height: 100%; }
+  .layout { display: flex; height: 100%; width: 100%; flex: 1; }
+
+  /* ── Server Rail (Tauri multi-server) ── */
+  .server-rail { display: none; }
+  .tauri-mode .server-rail {
+    display: flex; flex-direction: column; align-items: center;
+    width: 48px; min-width: 48px; background: #0a0e14;
+    border-right: 1px solid var(--border); padding: 8px 0;
+    gap: 6px; overflow-y: auto; flex-shrink: 0;
+  }
+  .server-icon { position: relative; cursor: pointer; padding: 2px; }
+  .server-icon-circle {
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.9rem; font-weight: bold; color: #fff;
+    transition: border-radius 0.15s;
+  }
+  img.server-icon-circle { border-radius: 50%; }
+  .server-icon:hover .server-icon-circle { border-radius: 30%; }
+  .server-icon.active .server-icon-circle { border-radius: 30%; box-shadow: 0 0 0 2px var(--accent); }
+  .server-indicator {
+    position: absolute; bottom: 1px; right: 1px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); border: 2px solid #0a0e14;
+  }
+  .server-add-btn {
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem; color: var(--text2); cursor: pointer;
+    border: 1px dashed var(--border); margin-top: 4px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .server-add-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Server context menu */
+  .server-context-menu {
+    position: fixed; z-index: 10000; background: var(--bg2);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 0; min-width: 160px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .server-ctx-header {
+    padding: 4px 12px; font-size: 0.7rem; color: var(--text2);
+    border-bottom: 1px solid var(--border); margin-bottom: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .server-ctx-item {
+    padding: 6px 12px; font-size: 0.8rem; color: var(--text);
+    cursor: pointer;
+  }
+  .server-ctx-item:hover { background: var(--bg3); }
+  .server-ctx-danger { color: var(--red); }
+  .server-ctx-danger:hover { background: rgba(248, 81, 73, 0.15); }
 
   /* Sidebar */
   .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border);

@@ -85,6 +85,8 @@ impl Hub {
         let valid = match key.as_str() {
             "registration_mode" => ["open", "closed", "invite"].contains(&value.as_str()),
             "channel_creation" => ["all", "admin"].contains(&value.as_str()),
+            "server_name" => value.len() <= 64,
+            "server_icon" => value.is_empty() || value.starts_with("/api/files/") || value.starts_with("https://") || value.starts_with("http://"),
             _ => false,
         };
         if !valid {

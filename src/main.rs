@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 
 use std::collections::HashMap;
@@ -180,7 +180,15 @@ async fn main() {
         .route("/api/music/*path", get(handle_music_download))
         .route("/ws", get(ws_upgrade))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
-        .layer(CorsLayer::new()) // S3: same-origin only (no permissive CORS)
+        .layer(CorsLayer::new()
+            .allow_origin(AllowOrigin::predicate(|origin, _| {
+                // Allow same-origin (browser) + Tauri desktop origins
+                let o = origin.as_bytes();
+                o.starts_with(b"tauri://") || o.starts_with(b"https://tauri.")
+            }))
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+            .allow_methods([http::Method::GET, http::Method::POST])
+        ) // S3: restricted CORS — same-origin + Tauri desktop clients
         .layer(Extension(state.clone()));
 
     let port: u16 = std::env::var("GATHERING_PORT")
@@ -284,8 +292,13 @@ async fn handle_server_info(
     Extension(state): Extension<Arc<AppState>>,
 ) -> impl IntoResponse {
     let mode = state.db.get_setting("registration_mode").unwrap_or_else(|| "open".to_string());
+    // DB settings override config.json for name/icon
+    let server_name = state.db.get_setting("server_name").or_else(|| state.config.server_name.clone());
+    let server_icon = state.db.get_setting("server_icon").or_else(|| state.config.server_icon.clone());
     Json(ServerInfoResponse {
         registration_mode: mode,
+        server_name,
+        server_icon,
     })
 }
 

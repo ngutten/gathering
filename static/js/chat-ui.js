@@ -6,6 +6,7 @@ import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime
 import { tryDecrypt } from './crypto.js';
 import { apiUrl, fileUrl } from './config.js';
 import { openReactionPicker, closeReactionPicker } from './emoji.js';
+import { scopedSet } from './storage.js';
 
 const TYPING_INDICATOR_TIMEOUT_MS = 3000;
 const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
@@ -604,7 +605,7 @@ export function switchChannel(name) {
   state.unreadCounts[name] = 0;
   delete state.unreadMentions[name];
   state.lastReadTimestamps[name] = new Date().toISOString();
-  try { localStorage.setItem('gathering_last_read_' + name, state.lastReadTimestamps[name]); } catch(e) {}
+  try { scopedSet('last_read_' + name, state.lastReadTimestamps[name]); } catch(e) {}
   const isVoice = state.voiceChannels && state.voiceChannels.some(ch => ch.name === name);
   if (isDMChannel(name)) {
     const other = state.dmChannels[name] || name;

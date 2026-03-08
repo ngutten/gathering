@@ -3,20 +3,19 @@
 import state, { emit } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
+import { scopedGet, scopedSet, scopedRemove } from './storage.js';
 
 // ── TOFU (Trust On First Use) public key pinning ────────────────────
 // Stores known user→publicKey mappings in localStorage.
 // On first contact, the key is pinned. If a different key is later seen
 // for the same user, the client warns and blocks key sharing.
-const PINNED_KEYS_STORAGE = 'gathering_pinned_keys';
-
 function loadPinnedKeys() {
-  try { return JSON.parse(localStorage.getItem(PINNED_KEYS_STORAGE) || '{}'); }
+  try { return JSON.parse(scopedGet('pinned_keys') || '{}'); }
   catch { return {}; }
 }
 
 function savePinnedKeys(pins) {
-  localStorage.setItem(PINNED_KEYS_STORAGE, JSON.stringify(pins));
+  scopedSet('pinned_keys', JSON.stringify(pins));
 }
 
 /** Pin a public key for a user (TOFU). Returns true if OK, false if conflict. */
@@ -65,8 +64,8 @@ export async function initE2E() {
   }
   await sodium.ready;
   // Load existing X25519 keypair — do NOT auto-generate
-  const storedSk = localStorage.getItem('gathering_e2e_sk');
-  const storedPk = localStorage.getItem('gathering_e2e_pk');
+  const storedSk = scopedGet('e2e_sk');
+  const storedPk = scopedGet('e2e_pk');
   if (storedSk && storedPk) {
     state.myKeyPair = {
       privateKey: sodium.from_base64(storedSk),
@@ -87,8 +86,8 @@ export function generateE2EKey(force) {
   if (state.myKeyPair && !force) return false;
   const kp = sodium.crypto_box_keypair();
   state.myKeyPair = { publicKey: kp.publicKey, privateKey: kp.privateKey };
-  localStorage.setItem('gathering_e2e_sk', sodium.to_base64(kp.privateKey));
-  localStorage.setItem('gathering_e2e_pk', sodium.to_base64(kp.publicKey));
+  scopedSet('e2e_sk', sodium.to_base64(kp.privateKey));
+  scopedSet('e2e_pk', sodium.to_base64(kp.publicKey));
   state.e2eReady = true;
   state.channelKeys = {};
   const pkB64 = sodium.to_base64(kp.publicKey);
@@ -198,8 +197,8 @@ export function importPrivateKey() {
       const pk = sodium.from_base64(data.pk);
       state.myKeyPair = { privateKey: sk, publicKey: pk };
       state.e2eReady = true;
-      localStorage.setItem('gathering_e2e_sk', data.sk);
-      localStorage.setItem('gathering_e2e_pk', data.pk);
+      scopedSet('e2e_sk', data.sk);
+      scopedSet('e2e_pk', data.pk);
       send('UploadPublicKey', { public_key: data.pk });
       // Pin our own key (overwrite any previous pin since this is an explicit import)
       if (state.currentUser) {
@@ -245,30 +244,28 @@ function renderEncryptedChannelStates() {
 }
 
 // Deny cooldown: suppress repeated key requests from the same user+channel
-const DENY_COOLDOWN_KEY = 'gathering_key_denials';
 const DEFAULT_DENY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 day
 
 function getDenials() {
   try {
-    return JSON.parse(localStorage.getItem(DENY_COOLDOWN_KEY) || '{}');
+    return JSON.parse(scopedGet('key_denials') || '{}');
   } catch { return {}; }
 }
 
 function setDenial(channel, user) {
   const denials = getDenials();
   denials[`${channel}:${user}`] = Date.now();
-  localStorage.setItem(DENY_COOLDOWN_KEY, JSON.stringify(denials));
+  scopedSet('key_denials', JSON.stringify(denials));
 }
 
 function isDenied(channel, user) {
   const denials = getDenials();
   const ts = denials[`${channel}:${user}`];
   if (!ts) return false;
-  const cooldown = parseInt(localStorage.getItem('gathering_deny_cooldown_ms') || DEFAULT_DENY_COOLDOWN_MS, 10);
-  if (Date.now() - ts < cooldown) return true;
+  if (Date.now() - ts < DEFAULT_DENY_COOLDOWN_MS) return true;
   // Expired — clean up
   delete denials[`${channel}:${user}`];
-  localStorage.setItem(DENY_COOLDOWN_KEY, JSON.stringify(denials));
+  scopedSet('key_denials', JSON.stringify(denials));
   return false;
 }
 
@@ -418,8 +415,8 @@ export function decryptKeyFromBackup(passphrase, backupData) {
     state.e2eReady = true;
     const skB64 = sodium.to_base64(privateKey);
     const pkB64 = sodium.to_base64(publicKey);
-    localStorage.setItem('gathering_e2e_sk', skB64);
-    localStorage.setItem('gathering_e2e_pk', pkB64);
+    scopedSet('e2e_sk', skB64);
+    scopedSet('e2e_pk', pkB64);
     send('UploadPublicKey', { public_key: pkB64 });
     if (state.currentUser) {
       unpinKey(state.currentUser);

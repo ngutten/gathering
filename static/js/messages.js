@@ -14,6 +14,7 @@ import { handleSearchResults, handleSearchHistory } from './search.js';
 import { routeWidgetBroadcast, routeWidgetServerResponse, clearUserPresence } from './widgets/widget-api.js';
 import { showNotification, renderNotificationSettings } from './notifications.js';
 import { isTauri, CLIENT_PROTOCOL_VERSION } from './config.js';
+import { scopedRemove } from './storage.js';
 
 function refreshOnlineUsersSidebar() {
   if (state.onlineUsers.length > 0) {
@@ -33,9 +34,16 @@ export function handleServerMsg(msg) {
         state.userRoles = msg.roles || [];
         state.isAdmin = state.userRoles.includes('admin');
         document.getElementById('auth-screen').style.display = 'none';
-        document.getElementById('chat-screen').style.display = 'block';
+        document.getElementById('chat-screen').style.display = 'flex';
         document.getElementById('display-user').textContent = state.currentUser;
         document.getElementById('admin-gear-btn').style.display = state.isAdmin ? '' : 'none';
+        // Show server name in sidebar header if set
+        const sidebarTitle = document.querySelector('.sidebar-header h2');
+        if (sidebarTitle && state.serverName) {
+          sidebarTitle.textContent = state.serverName;
+        } else if (sidebarTitle) {
+          sidebarTitle.innerHTML = '&#x2381; Gathering';
+        }
         initE2E().then(() => updateKeyUI());
         send('GetPreferences', {});
         // Trigger widget presence check for the default channel
@@ -48,7 +56,7 @@ export function handleServerMsg(msg) {
       } else {
         document.getElementById('auth-error').textContent = msg.error || 'Auth failed';
         state.token = null;
-        localStorage.removeItem('gathering_token');
+        scopedRemove('token');
         document.getElementById('auth-screen').style.display = 'flex';
       }
       break;

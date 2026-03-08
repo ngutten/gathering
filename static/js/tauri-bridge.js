@@ -1,7 +1,7 @@
-// tauri-bridge.js — Tauri-specific overrides (classic script, not a module)
+// tauri-bridge.js — Tauri-specific: server rail, multi-server switching (classic script)
 //
 // Loaded only when running inside the Tauri webview.
-// Provides server URL selection/management UI.
+// Provides server rail UI and multi-server management.
 
 (function() {
   // Tauri v2 exposes __TAURI_INTERNALS__
@@ -9,35 +9,10 @@
 
   // Mark for detection by config.js
   window.__TAURI__ = true;
+  document.body.classList.add('tauri-mode');
 
-  // ── Server history management ──
-  function getServerHistory() {
-    try {
-      return JSON.parse(localStorage.getItem('gathering_server_history') || '[]');
-    } catch { return []; }
-  }
-
-  function saveServerHistory(list) {
-    localStorage.setItem('gathering_server_history', JSON.stringify(list));
-  }
-
-  function addToHistory(url) {
-    const history = getServerHistory().filter(u => u !== url);
-    history.unshift(url);
-    saveServerHistory(history);
-  }
-
-  function removeFromHistory(url) {
-    saveServerHistory(getServerHistory().filter(u => u !== url));
-  }
-
-  function selectServer(url) {
-    const cleaned = url.trim().replace(/\/$/, '');
-    if (!cleaned) return;
-    addToHistory(cleaned);
-    localStorage.setItem('gathering_server_url', cleaned);
-    location.reload();
-  }
+  // ── Storage helpers (wait for gatheringStorage to be set by storage.js module) ──
+  function store() { return window.gatheringStorage; }
 
   function escapeText(s) {
     const d = document.createElement('div');
@@ -45,22 +20,353 @@
     return d.innerHTML;
   }
 
-  // ── Server picker UI ──
-  function showServerPicker() {
-    const history = getServerHistory();
-    const current = localStorage.getItem('gathering_server_url') || '';
+  // ── Server snapshots (in-memory, per-server state) ──
+  const serverSnapshots = {};
 
-    // Hide other screens while picker is shown
+  // ── Color hash for server icons ──
+  function serverColor(url) {
+    let hash = 0;
+    for (let i = 0; i < url.length; i++) {
+      hash = ((hash << 5) - hash) + url.charCodeAt(i);
+      hash |= 0;
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 60%, 45%)`;
+  }
+
+  function serverLabel(url) {
+    try {
+      const u = new URL(url);
+      return u.hostname.charAt(0).toUpperCase();
+    } catch {
+      return url.charAt(0).toUpperCase();
+    }
+  }
+
+  function serverDisplayName(url) {
+    try {
+      const u = new URL(url);
+      return u.host;
+    } catch {
+      return url;
+    }
+  }
+
+  // ── Switch server logic ──
+  function switchServer(url) {
+    const s = store();
+    const currentUrl = s.getActiveServer();
+    if (currentUrl === url) return;
+
+    // 1. Snapshot current state (if connected)
+    if (currentUrl && window._gatheringState) {
+      const state = window._gatheringState;
+
+      // Cleanup voice if active
+      if (state.inVoiceChannel && window._cleanupVoice) {
+        window._cleanupVoice();
+      }
+
+      // Clear widget presence for current channel/user
+      if (window._clearUserPresence && state.currentChannel && state.currentUser) {
+        window._clearUserPresence(state.currentChannel, state.currentUser);
+      }
+
+      // Snapshot state
+      if (window._snapshotState) {
+        serverSnapshots[currentUrl] = window._snapshotState();
+      }
+
+      // Close WebSocket cleanly
+      if (state.ws) {
+        state.ws.onmessage = null;
+        state.ws.onclose = null;
+        state.ws.close();
+        state.ws = null;
+      }
+
+      // Reset state
+      if (window._resetState) {
+        window._resetState();
+      }
+    }
+
+    // 2. Set new active server
+    s.setActiveServer(url);
+
+    // 3. Restore state for target server
+    if (serverSnapshots[url] && window._restoreState) {
+      window._restoreState(serverSnapshots[url]);
+    } else if (window._gatheringState) {
+      // Load token from scoped storage
+      const state = window._gatheringState;
+      state.token = s.scopedGet('token');
+      // Load last-read timestamps
+      state.lastReadTimestamps = {};
+      for (const { suffix, value } of s.scopedEntries('last_read_')) {
+        state.lastReadTimestamps[suffix] = value;
+      }
+    }
+
+    // 4. Clear DOM
+    const messages = document.getElementById('messages');
+    if (messages) messages.innerHTML = '';
+    const channelList = document.getElementById('channel-list');
+    if (channelList) channelList.innerHTML = '';
+    const dmList = document.getElementById('dm-list');
+    if (dmList) dmList.innerHTML = '';
+    const onlineUsers = document.getElementById('online-users');
+    if (onlineUsers) onlineUsers.innerHTML = '';
+    const voiceChannelList = document.getElementById('voice-channel-list');
+    if (voiceChannelList) voiceChannelList.innerHTML = '';
+    const voiceMembers = document.getElementById('voice-members');
+    if (voiceMembers) voiceMembers.innerHTML = '';
+    const keyRequests = document.getElementById('key-requests');
+    if (keyRequests) keyRequests.innerHTML = '';
+    const widgetPanel = document.getElementById('widget-panel');
+    if (widgetPanel) { widgetPanel.innerHTML = ''; widgetPanel.style.display = 'none'; }
+
+    // Reset channel header
+    const channelName = document.getElementById('chat-channel-name');
+    if (channelName) channelName.textContent = '#general';
+
+    // 5. Connect or show auth
+    const state = window._gatheringState;
+    if (state && state.token) {
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('chat-screen').style.display = 'flex';
+      if (window._connectWS) window._connectWS();
+    } else {
+      document.getElementById('chat-screen').style.display = 'none';
+      document.getElementById('auth-screen').style.display = 'flex';
+      document.getElementById('password').value = '';
+      // Check server info for new server
+      if (window._checkServerInfo) window._checkServerInfo();
+    }
+
+    // 6. Update rail highlight + auth server info
+    renderServerRail();
+    updateAuthServerInfo();
+  }
+
+  // ── Auth screen server indicator ──
+  function updateAuthServerInfo() {
+    const el = document.getElementById('auth-server-info');
+    if (!el) return;
+    const s = store();
+    const url = s ? s.getActiveServer() : '';
+    if (!url) {
+      el.innerHTML = '';
+      return;
+    }
+    const st = window._gatheringState;
+    const name = (st && st.serverName) || serverDisplayName(url);
+    el.innerHTML = `<span>Server: <span class="server-name">${escapeText(name)}</span></span>` +
+      `<span class="server-change" onclick="configureServer()">change</span>`;
+  }
+
+  // ── Server Rail UI ──
+  function renderServerRail() {
+    const s = store();
+    if (!s) return;
+
+    const rail = document.getElementById('server-rail');
+    if (!rail) return;
+
+    const history = s.getServerHistory();
+    const activeUrl = s.getActiveServer();
+
+    let html = '';
+
+    // Server icons
+    const st = window._gatheringState;
+    history.forEach((url) => {
+      const isActive = url === activeUrl;
+      const hasToken = s.serverHasToken(url);
+      const color = serverColor(url);
+      // Use server branding for the active server if available
+      const hasIcon = isActive && st && st.serverIcon;
+      const label = hasIcon ? null : serverLabel(url);
+      const brandName = (isActive && st && st.serverName) ? st.serverName : null;
+      const displayName = brandName || serverDisplayName(url);
+
+      html += `<div class="server-icon${isActive ? ' active' : ''}" data-url="${escapeText(url)}" title="${escapeText(displayName)}">`;
+      if (hasIcon) {
+        html += `<img class="server-icon-circle" src="${escapeText(st.serverIcon)}" alt="${escapeText(displayName)}" style="object-fit:cover;">`;
+      } else {
+        html += `<div class="server-icon-circle" style="background:${color};">${label}</div>`;
+      }
+      if (hasToken) html += '<div class="server-indicator"></div>';
+      html += '</div>';
+    });
+
+    // Add button
+    html += '<div class="server-add-btn" title="Add server">+</div>';
+
+    rail.innerHTML = html;
+
+    // Wire click events
+    rail.querySelectorAll('.server-icon').forEach(el => {
+      el.addEventListener('click', () => {
+        switchServer(el.dataset.url);
+      });
+
+      // Right-click context menu
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showServerContextMenu(e.clientX, e.clientY, el.dataset.url);
+      });
+    });
+
+    rail.querySelector('.server-add-btn').addEventListener('click', showAddServerModal);
+  }
+
+  // ── Context menu ──
+  function showServerContextMenu(x, y, url) {
+    // Remove existing menu
+    const existing = document.getElementById('server-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'server-context-menu';
+    menu.className = 'server-context-menu';
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+
+    const s = store();
+    const hasToken = s.serverHasToken(url);
+    const displayName = serverDisplayName(url);
+
+    let html = `<div class="server-ctx-header">${escapeText(displayName)}</div>`;
+    if (hasToken) {
+      html += '<div class="server-ctx-item" data-action="logout">Log out</div>';
+    }
+    html += '<div class="server-ctx-item server-ctx-danger" data-action="remove">Remove server</div>';
+
+    menu.innerHTML = html;
+    document.body.appendChild(menu);
+
+    // Position: keep in viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+    menu.addEventListener('click', (e) => {
+      const action = e.target.dataset.action;
+      if (action === 'logout') {
+        // Clear token but keep in list
+        const scope = url;
+        // Use removeServerData-like approach but only for token
+        const scopeKey = (() => { try { return new URL(url).host; } catch { return url; } })();
+        localStorage.removeItem(`gathering@${scopeKey}:token`);
+        // If this is the active server, show auth screen
+        if (s.getActiveServer() === url && window._gatheringState) {
+          window._gatheringState.token = null;
+          if (window._gatheringState.ws) {
+            window._gatheringState.ws.onclose = null;
+            window._gatheringState.ws.close();
+            window._gatheringState.ws = null;
+          }
+          document.getElementById('chat-screen').style.display = 'none';
+          document.getElementById('auth-screen').style.display = 'flex';
+        }
+        // Clear snapshot
+        delete serverSnapshots[url];
+        renderServerRail();
+      } else if (action === 'remove') {
+        const deleteData = confirm(`Remove ${displayName}?\n\nClick OK to also delete saved data (token, keys, TOFU pins, read state).`);
+        if (deleteData) {
+          s.removeServerData(url);
+        }
+        s.removeServerFromHistory(url);
+        delete serverSnapshots[url];
+        // If removing active server, switch to next or show picker
+        if (s.getActiveServer() === url) {
+          const remaining = s.getServerHistory();
+          if (remaining.length > 0) {
+            switchServer(remaining[0]);
+          } else {
+            s.setActiveServer('');
+            showFirstLaunchPicker();
+          }
+        }
+        renderServerRail();
+      }
+      menu.remove();
+    });
+
+    // Close on click elsewhere
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  // ── Add Server Modal ──
+  function showAddServerModal() {
+    const existing = document.getElementById('add-server-modal');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'add-server-modal';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1.5rem;width:380px;color:var(--text);font-family:inherit;';
+    box.innerHTML = `
+      <h3 style="margin:0 0 0.5rem 0;font-size:1rem;color:var(--accent);">Add Server</h3>
+      <p style="font-size:0.8rem;color:var(--text2);margin:0 0 1rem 0;">Enter the server URL to connect.</p>
+      <input type="text" id="add-server-url" placeholder="https://gather.example.com"
+             style="width:100%;padding:0.5rem 0.7rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;font-size:0.85rem;box-sizing:border-box;margin-bottom:0.5rem;">
+      <div id="add-server-error" style="color:var(--red);font-size:0.75rem;margin-bottom:0.5rem;"></div>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+        <button id="add-server-cancel" style="padding:0.3rem 0.8rem;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.8rem;">Cancel</button>
+        <button id="add-server-connect" style="padding:0.3rem 0.8rem;background:var(--accent2);color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.8rem;">Connect</button>
+      </div>
+    `;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const urlInput = document.getElementById('add-server-url');
+    const errEl = document.getElementById('add-server-error');
+
+    function doConnect() {
+      const url = urlInput.value.trim().replace(/\/$/, '');
+      if (!url) { errEl.textContent = 'Enter a URL'; return; }
+      try { new URL(url); } catch { errEl.textContent = 'Invalid URL'; return; }
+      const s = store();
+      s.addServerToHistory(url);
+      overlay.remove();
+      switchServer(url);
+    }
+
+    document.getElementById('add-server-connect').addEventListener('click', doConnect);
+    urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doConnect(); });
+    document.getElementById('add-server-cancel').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    urlInput.focus();
+  }
+
+  // ── First-launch: show full-screen server picker ──
+  function showFirstLaunchPicker() {
+    const s = store();
+    const history = s ? s.getServerHistory() : [];
+
+    // Hide other screens
     const authScreen = document.getElementById('auth-screen');
     const chatScreen = document.getElementById('chat-screen');
+    const rail = document.getElementById('server-rail');
     if (authScreen) authScreen.style.display = 'none';
     if (chatScreen) chatScreen.style.display = 'none';
+    if (rail) rail.style.display = 'none';
 
-    // Remove existing picker if any
     const existing = document.getElementById('server-picker');
     if (existing) existing.remove();
 
-    // Create overlay
     const overlay = document.createElement('div');
     overlay.id = 'server-picker';
     overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;position:fixed;top:0;left:0;z-index:1000;background:var(--bg);';
@@ -71,135 +377,94 @@
     let html = '<h1 style="font-size:1.4rem;margin-bottom:0.3rem;color:var(--accent);">&#x2381; Gathering</h1>';
     html += '<p style="font-size:0.8rem;color:var(--text2);margin-bottom:1.5rem;">Connect to a server</p>';
 
-    // Previous servers
     if (history.length > 0) {
       html += '<div style="margin-bottom:1rem;">';
       html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text2);letter-spacing:0.05em;margin-bottom:0.5rem;">Recent servers</div>';
       history.forEach((url, i) => {
-        const isActive = url === current;
         html += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">';
-        html += `<button data-connect="${i}" style="flex:1;text-align:left;padding:0.5rem 0.7rem;background:${isActive ? 'var(--accent2)' : 'var(--bg)'};border:1px solid ${isActive ? 'var(--accent2)' : 'var(--border)'};border-radius:4px;color:${isActive ? '#fff' : 'var(--text)'};font-family:inherit;font-size:0.85rem;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeText(url)}</button>`;
-        html += `<button data-delete="${i}" title="Forget" style="padding:0.3rem 0.5rem;background:none;border:1px solid var(--border);border-radius:4px;color:var(--red);cursor:pointer;font-size:0.85rem;line-height:1;font-family:inherit;">&times;</button>`;
+        html += `<button data-connect="${i}" style="flex:1;text-align:left;padding:0.5rem 0.7rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;font-size:0.85rem;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeText(url)}</button>`;
         html += '</div>';
       });
       html += '</div>';
     }
 
-    // New server input
     html += '<div style="border-top:1px solid var(--border);padding-top:1rem;">';
     html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text2);letter-spacing:0.05em;margin-bottom:0.5rem;">New server</div>';
     html += '<div style="display:flex;gap:0.5rem;">';
-    html += '<input id="new-server-url" type="text" placeholder="https://gather.example.com" style="flex:1;padding:0.5rem 0.7rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;font-size:0.85rem;">';
-    html += '<button id="connect-new-btn" style="padding:0.5rem 1rem;background:var(--accent2);color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.85rem;">Connect</button>';
+    html += '<input id="first-server-url" type="text" placeholder="https://gather.example.com" style="flex:1;padding:0.5rem 0.7rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;font-size:0.85rem;">';
+    html += '<button id="first-connect-btn" style="padding:0.5rem 1rem;background:var(--accent2);color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.85rem;">Connect</button>';
     html += '</div></div>';
-
-    // Cancel button (only if a server is already configured)
-    if (current) {
-      html += '<div style="margin-top:1rem;text-align:center;">';
-      html += '<button id="picker-cancel-btn" style="padding:0.4rem 1rem;background:var(--bg3);color:var(--text2);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-family:inherit;font-size:0.8rem;">Cancel</button>';
-      html += '</div>';
-    }
 
     box.innerHTML = html;
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    // Wire up events
+    function connectTo(url) {
+      const cleaned = url.trim().replace(/\/$/, '');
+      if (!cleaned) return;
+      const s = store();
+      s.addServerToHistory(cleaned);
+      s.setActiveServer(cleaned);
+      overlay.remove();
+      // Reload to initialize with new server
+      location.reload();
+    }
+
     box.querySelectorAll('[data-connect]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        selectServer(history[parseInt(btn.dataset.connect)]);
-      });
+      btn.addEventListener('click', () => connectTo(history[parseInt(btn.dataset.connect)]));
     });
 
-    box.querySelectorAll('[data-delete]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const url = history[parseInt(btn.dataset.delete)];
-        removeFromHistory(url);
-        if (localStorage.getItem('gathering_server_url') === url) {
-          localStorage.removeItem('gathering_server_url');
-        }
-        // Re-render picker
-        showServerPicker();
-      });
-    });
-
-    const connectNewBtn = document.getElementById('connect-new-btn');
-    const newUrlInput = document.getElementById('new-server-url');
-    connectNewBtn.addEventListener('click', () => {
-      const url = newUrlInput.value.trim();
-      if (url) selectServer(url);
-    });
-    newUrlInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const url = newUrlInput.value.trim();
-        if (url) selectServer(url);
-      }
-    });
-
-    // Cancel button
-    const cancelBtn = document.getElementById('picker-cancel-btn');
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', () => {
-        overlay.remove();
-        // Restore whichever screen was visible
-        if (chatScreen && chatScreen.style.display === 'block') {
-          chatScreen.style.display = 'block';
-        } else if (authScreen) {
-          authScreen.style.display = 'flex';
-        }
-      });
-    }
-
-    newUrlInput.focus();
-  }
-
-  // ── Inject "Change Server" buttons into the UI ──
-  function injectServerButtons() {
-    // Auth screen: add link below auth buttons
-    const authBox = document.querySelector('.auth-box');
-    if (authBox && !document.getElementById('auth-change-server')) {
-      const current = localStorage.getItem('gathering_server_url');
-      const div = document.createElement('div');
-      div.id = 'auth-change-server';
-      div.style.cssText = 'margin-top:1rem;text-align:center;';
-      div.innerHTML = (current
-        ? '<div style="font-size:0.7rem;color:var(--text2);margin-bottom:0.3rem;">Server: <code style="color:var(--accent);font-size:0.7rem;">' + escapeText(current) + '</code></div>'
-        : '') +
-        '<button onclick="configureServer()" style="padding:0.3rem 0.7rem;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.75rem;">Change Server</button>';
-      authBox.appendChild(div);
-    }
-
-    // Sidebar: add to sidebar-bottom
-    const sidebarBottom = document.querySelector('.sidebar-bottom');
-    if (sidebarBottom && !document.getElementById('sidebar-change-server')) {
-      const btn = document.createElement('div');
-      btn.id = 'sidebar-change-server';
-      btn.style.cssText = 'margin-top:0.4rem;';
-      const current = localStorage.getItem('gathering_server_url') || '';
-      btn.innerHTML = '<button onclick="configureServer()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Change Server</button>';
-      sidebarBottom.appendChild(btn);
-    }
+    const connectBtn = document.getElementById('first-connect-btn');
+    const urlInput = document.getElementById('first-server-url');
+    connectBtn.addEventListener('click', () => connectTo(urlInput.value));
+    urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectTo(urlInput.value); });
+    urlInput.focus();
   }
 
   // ── Initialization ──
-  const serverUrl = localStorage.getItem('gathering_server_url');
-  if (!serverUrl) {
-    // No server configured — show picker on DOMContentLoaded
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', showServerPicker);
-    } else {
-      showServerPicker();
+  function init() {
+    const s = store();
+    if (!s) {
+      // Storage module not loaded yet, retry
+      setTimeout(init, 50);
+      return;
     }
+
+    // Migration: handle old gathering_server_url key
+    const legacyUrl = localStorage.getItem('gathering_server_url');
+    if (legacyUrl && !s.getActiveServer()) {
+      s.setActiveServer(legacyUrl);
+      s.addServerToHistory(legacyUrl);
+      localStorage.removeItem('gathering_server_url');
+    }
+
+    const serverUrl = s.getActiveServer();
+    if (!serverUrl) {
+      showFirstLaunchPicker();
+      return;
+    }
+
+    // Ensure active server is in history
+    const history = s.getServerHistory();
+    if (!history.includes(serverUrl)) {
+      s.addServerToHistory(serverUrl);
+    }
+
+    // Render rail once DOM is ready
+    renderServerRail();
+    updateAuthServerInfo();
   }
 
-  // Inject buttons once DOM is ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', injectServerButtons);
+    document.addEventListener('DOMContentLoaded', init);
   } else {
-    injectServerButtons();
+    // Storage module might not be loaded yet if script runs before modules
+    setTimeout(init, 0);
   }
 
-  // Expose for onclick handlers
-  window.configureServer = showServerPicker;
+  // Expose for onclick handlers and module bridge
+  window.configureServer = showAddServerModal;
+  window._switchServer = switchServer;
+  window._renderServerRail = renderServerRail;
+  window._updateAuthServerInfo = updateAuthServerInfo;
 })();
