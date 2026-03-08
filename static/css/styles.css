@@ -817,6 +817,58 @@
                    color: #fff; font-family: sans-serif; font-size: 16px; padding: 2px 4px;
                    min-width: 60px; min-height: 1.4em; resize: both; outline: none; z-index: 10; }
 
+  /* ── Goban (Go) widget ─── */
+  .goban-widget { display: flex; flex-direction: column; padding: 0; min-width: 320px; }
+  .goban-header { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); background: var(--bg2); }
+  .goban-header-row { display: flex; align-items: center; gap: 0.5rem; }
+  .goban-status { font-size: 0.8rem; font-weight: 600; color: var(--text); }
+  .goban-captures { display: flex; gap: 1rem; font-size: 0.7rem; color: var(--text2); margin-top: 0.2rem; }
+  .goban-board-wrap { display: flex; justify-content: center; align-items: center; padding: 0.5rem;
+                      background: var(--bg); }
+  .goban-canvas { cursor: pointer; border-radius: 4px; max-width: 100%; height: auto; }
+  .goban-info { padding: 0.4rem 0.6rem; border-top: 1px solid var(--border); }
+
+  .goban-setup { display: flex; flex-direction: column; gap: 0.4rem; }
+  .goban-setup-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--text); }
+  .goban-setup-row label { font-size: 0.8rem; color: var(--text2); min-width: 70px; }
+  .goban-komi-input { width: 60px; padding: 0.2rem 0.4rem; background: var(--bg2); border: 1px solid var(--border);
+                      border-radius: 4px; color: var(--text); font-family: inherit; font-size: 0.8rem; }
+  .goban-komi-input:focus { outline: none; border-color: var(--accent); }
+
+  .goban-players { display: flex; gap: 0.6rem; margin: 0.3rem 0; }
+  .goban-player-slot { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+                       padding: 0.4rem 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
+  .goban-slot-header { font-size: 0.8rem; font-weight: 600; color: var(--text); }
+  .goban-slot-players { font-size: 0.75rem; color: var(--text2); min-height: 1.2em; }
+  .goban-empty-slot { font-style: italic; color: var(--text2); opacity: 0.6; }
+  .goban-player-name { color: var(--accent); }
+
+  .goban-btn { padding: 0.25rem 0.5rem; background: var(--bg3); border: 1px solid var(--border);
+               border-radius: 4px; color: var(--text); font-family: inherit; font-size: 0.75rem;
+               cursor: pointer; white-space: nowrap; }
+  .goban-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .goban-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .goban-btn:disabled:hover { border-color: var(--border); color: var(--text); }
+  .goban-btn.active { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+  .goban-start-btn { background: var(--accent2); color: #fff; border-color: var(--accent2);
+                     padding: 0.35rem 1rem; font-size: 0.85rem; }
+  .goban-start-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .goban-start-btn:disabled { background: var(--bg3); color: var(--text2); border-color: var(--border); }
+  .goban-resign-btn { border-color: var(--red); color: var(--red); }
+  .goban-resign-btn:hover { background: var(--red); color: #fff; }
+  .goban-dispute-btn { border-color: var(--orange); color: var(--orange); }
+  .goban-dispute-btn:hover { background: var(--orange); color: #fff; }
+  .goban-join-btn { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+  .goban-join-btn:hover { background: var(--accent); border-color: var(--accent); }
+  .goban-leave-btn { border-color: var(--red); color: var(--red); font-size: 0.7rem; }
+
+  .goban-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .goban-player-info { display: flex; gap: 1rem; font-size: 0.75rem; color: var(--text2); flex: 1; }
+  .goban-scoring { display: flex; flex-direction: column; gap: 0.3rem; }
+  .goban-score-display { display: flex; gap: 1rem; font-size: 0.8rem; font-weight: 600; color: var(--text); }
+  .goban-score-status { font-size: 0.7rem; color: var(--text2); }
+  .goban-finished { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
+
   /* ── User profiles ─── */
   .user-avatar { vertical-align: middle; margin-right: 0.3rem; flex-shrink: 0; }
   .user-item-name .user-avatar { margin-right: 0.3rem; }

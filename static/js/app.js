@@ -22,6 +22,7 @@ import './widgets/initiative.js';
 import './widgets/radio.js';
 import './widgets/whiteboard.js';
 import './widgets/piano.js';
+import './widgets/goban.js';
 // Expose helpers for widgets
 window._widgetTransport = { send };
 window._getActiveWidgets = getActiveWidgets;
