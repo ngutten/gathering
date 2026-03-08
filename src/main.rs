@@ -993,6 +993,17 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     }
                     Err(e) => {
                         tracing::warn!("Bad message from {}: {}", client_id, e);
+                        // Try to extract the message type so the client gets
+                        // actionable feedback instead of silent failure.
+                        let msg_type = serde_json::from_str::<serde_json::Value>(&text)
+                            .ok()
+                            .and_then(|v| v.get("type")?.as_str().map(String::from));
+                        if let Some(t) = msg_type {
+                            state.hub.send_client_error(
+                                client_id,
+                                &format!("unsupported_message: {}", t),
+                            ).await;
+                        }
                     }
                 }
             }

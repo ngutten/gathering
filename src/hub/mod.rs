@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::db::Db;
-use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg};
+use crate::protocol::{ChannelInfo, ClientMsg, ServerMsg, PROTOCOL_VERSION, SERVER_CAPABILITIES};
 use std::path::PathBuf;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 100;
@@ -33,6 +33,8 @@ pub(super) struct Client {
     pub(super) video_on: bool,
     /// Whether screen sharing is on
     pub(super) screen_share_on: bool,
+    /// Protocol version the client announced (None = pre-negotiation client)
+    pub(super) protocol_version: Option<u32>,
     /// Sender to push messages to their WebSocket
     pub(super) tx: mpsc::UnboundedSender<Message>,
 }
@@ -67,6 +69,7 @@ impl Hub {
             voice_channel: None,
             video_on: false,
             screen_share_on: false,
+            protocol_version: None,
             tx,
         };
         self.clients.lock().await.insert(id, client);
@@ -194,8 +197,17 @@ impl Hub {
         }
 
         match msg {
-            ClientMsg::Auth { token } => {
+            ClientMsg::Auth { token, protocol_version } => {
+                // Store client's protocol version
+                {
+                    let mut clients = self.clients.lock().await;
+                    if let Some(client) = clients.get_mut(&id) {
+                        client.protocol_version = protocol_version;
+                    }
+                }
+
                 let result = self.authenticate(id, &token).await;
+                let capabilities: Vec<String> = SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect();
                 let clients = self.clients.lock().await;
                 if let Some(client) = clients.get(&id) {
                     let resp = match result {
@@ -206,6 +218,8 @@ impl Hub {
                                 username: Some(u.clone()),
                                 error: None,
                                 roles: Some(roles),
+                                protocol_version: Some(PROTOCOL_VERSION),
+                                capabilities: Some(capabilities),
                             }
                         }
                         Err(ref e) => ServerMsg::AuthResult {
@@ -213,6 +227,8 @@ impl Hub {
                             username: None,
                             error: Some(e.clone()),
                             roles: None,
+                            protocol_version: Some(PROTOCOL_VERSION),
+                            capabilities: None,
                         },
                     };
                     if let Err(e) = Self::send_to(&client.tx, &resp) {
@@ -657,6 +673,11 @@ impl Hub {
                 eprintln!("[hub] send message to client {id} failed: {e:?}");
             }
         }
+    }
+
+    /// Send an error to a client (public, for use by the WS handler on parse failures)
+    pub async fn send_client_error(&self, id: usize, msg: &str) {
+        self.send_error(id, msg).await;
     }
 
     /// Graceful shutdown: notify all clients and drop their senders

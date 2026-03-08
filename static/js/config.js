@@ -2,6 +2,9 @@
 
 export const isTauri = typeof window !== 'undefined' && !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
 
+/// Client protocol version — must match PROTOCOL_VERSION in protocol.rs
+export const CLIENT_PROTOCOL_VERSION = 1;
+
 function getServerBase() {
   if (isTauri) {
     return localStorage.getItem('gathering_server_url') || '';

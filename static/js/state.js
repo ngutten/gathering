@@ -96,6 +96,10 @@ const state = {
 
   // Online users list (kept in sync with OnlineUsers messages)
   onlineUsers: [],
+
+  // Protocol negotiation
+  serverProtocolVersion: null,
+  serverCapabilities: [],
 };
 
 // Load last-read timestamps from localStorage
@@ -124,6 +128,13 @@ export function emit(event, ...args) {
 
 export function isDMChannel(name) {
   return name && name.startsWith('dm:');
+}
+
+/// Check if the server advertised a given capability.
+/// Returns true if the server didn't send capabilities at all (pre-negotiation server = assume all).
+export function serverHas(capability) {
+  if (state.serverCapabilities.length === 0) return true; // old server, assume everything
+  return state.serverCapabilities.includes(capability);
 }
 
 export default state;

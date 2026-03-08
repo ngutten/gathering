@@ -1,6 +1,6 @@
 // transport.js — WebSocket wrapper and API fetch
 
-import { wsUrl, apiUrl } from './config.js';
+import { wsUrl, apiUrl, CLIENT_PROTOCOL_VERSION } from './config.js';
 import state, { emit } from './state.js';
 
 const RECONNECT_DELAY_MS = 3000;
@@ -9,7 +9,7 @@ export function connectWS() {
   state.ws = new WebSocket(wsUrl());
 
   state.ws.onopen = () => {
-    state.ws.send(JSON.stringify({ type: 'Auth', token: state.token }));
+    state.ws.send(JSON.stringify({ type: 'Auth', token: state.token, protocol_version: CLIENT_PROTOCOL_VERSION }));
   };
 
   state.ws.onmessage = (e) => {

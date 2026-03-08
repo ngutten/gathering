@@ -13,6 +13,7 @@ import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.j
 import { handleSearchResults, handleSearchHistory } from './search.js';
 import { routeWidgetBroadcast, routeWidgetServerResponse, clearUserPresence } from './widgets/widget-api.js';
 import { showNotification, renderNotificationSettings } from './notifications.js';
+import { isTauri, CLIENT_PROTOCOL_VERSION } from './config.js';
 
 function refreshOnlineUsersSidebar() {
   if (state.onlineUsers.length > 0) {
@@ -23,6 +24,10 @@ function refreshOnlineUsersSidebar() {
 export function handleServerMsg(msg) {
   switch (msg.type) {
     case 'AuthResult':
+      // Store protocol negotiation info
+      state.serverProtocolVersion = msg.protocol_version || null;
+      state.serverCapabilities = msg.capabilities || [];
+
       if (msg.ok) {
         state.currentUser = msg.username;
         state.userRoles = msg.roles || [];
@@ -35,6 +40,11 @@ export function handleServerMsg(msg) {
         send('GetPreferences', {});
         // Trigger widget presence check for the default channel
         emit('channel-switched', state.currentChannel);
+
+        // For standalone clients: hint if the server is running a newer protocol
+        if (isTauri && state.serverProtocolVersion && state.serverProtocolVersion > CLIENT_PROTOCOL_VERSION) {
+          appendSystem('This server supports newer features than your client. Consider updating for the best experience.');
+        }
       } else {
         document.getElementById('auth-error').textContent = msg.error || 'Auth failed';
         state.token = null;
@@ -640,6 +650,12 @@ export function handleServerMsg(msg) {
 
     case 'ServerShutdown':
       appendSystem(`Server shutting down: ${msg.reason}`);
+      break;
+
+    default:
+      // Gracefully ignore message types this client doesn't know about.
+      // This allows old clients to keep working when the server adds features.
+      console.log(`Unknown server message type: ${msg.type}`);
       break;
   }
 }

@@ -3,6 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, BTreeMap};
 use uuid::Uuid;
 
+// ── Protocol versioning ─────────────────────────────────────────────
+
+/// Increment when adding new message types or changing existing ones.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Coarse-grained feature areas this server supports.
+/// Clients can check these to hide UI for unsupported features.
+pub const SERVER_CAPABILITIES: &[&str] = &[
+    "chat", "voice", "topics", "reactions", "pins", "search",
+    "e2e", "files", "roles", "dms", "profiles", "widgets",
+    "channel_access",
+];
+
 // ── Reply-to reference ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,7 +31,11 @@ pub struct ReplyRef {
 #[serde(tag = "type")]
 pub enum ClientMsg {
     /// Authenticate with token (obtained via HTTP login)
-    Auth { token: String },
+    Auth {
+        token: String,
+        #[serde(default)]
+        protocol_version: Option<u32>,
+    },
     /// Send a chat message to a channel
     Send {
         channel: String,
@@ -187,6 +204,10 @@ pub enum ServerMsg {
         error: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         roles: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_version: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Vec<String>>,
     },
     /// A chat message (new or historical)
     Message {
