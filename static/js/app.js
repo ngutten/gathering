@@ -21,12 +21,14 @@ import './widgets/dice-roller.js';
 import './widgets/initiative.js';
 import './widgets/radio.js';
 import './widgets/whiteboard.js';
+import './widgets/piano.js';
 // Expose helpers for widgets
 window._widgetTransport = { send };
 window._getActiveWidgets = getActiveWidgets;
 import { diceRoll, diceRollQuick } from './widgets/dice-roller.js';
 import { initiativeAdd, initiativeRemove, initiativeNext, initiativeClear } from './widgets/initiative.js';
 import { radioTogglePlay, radioNext, radioPrev, radioStop, radioBecameDJ, radioSetVolume, radioSeek, radioToggleDir, radioPlayDir, radioPlayFile, radioSwitchBrowse, radioPickTopicChannel, radioLoadTopicFiles, radioClearTopicFiles, radioPlayTopicFiles } from './widgets/radio.js';
+import { pianoConnectMidi } from './widgets/piano.js';
 
 // ── Wire event emitter ──
 on('server-message', handleServerMsg);
@@ -171,6 +173,7 @@ window.radioPickTopicChannel = radioPickTopicChannel;
 window.radioLoadTopicFiles = radioLoadTopicFiles;
 window.radioClearTopicFiles = radioClearTopicFiles;
 window.radioPlayTopicFiles = radioPlayTopicFiles;
+window.pianoConnectMidi = pianoConnectMidi;
 
 // ── Mobile back button: navigate channel history, confirm before leaving ──
 // Set initial history state so the first back press triggers popstate

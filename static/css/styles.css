@@ -594,6 +594,28 @@
                    border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.8rem; }
   .dice-roll-btn:hover { background: var(--accent); }
 
+  /* ── Piano widget ─── */
+  .piano-widget { display: flex; flex-direction: column; padding: 0; }
+  .piano-canvas { width: 100%; height: 80px; display: block; }
+  .piano-bar { display: flex; user-select: none; height: 28px; position: relative; }
+  .piano-key { cursor: pointer; transition: background 0.05s; }
+  .piano-key.white { flex: 1; height: 24px; background: #e8e8e8; border-right: 1px solid var(--border);
+                     border-bottom: 1px solid var(--border); z-index: 1; align-self: flex-end; }
+  .piano-key.white:last-child { border-right: none; }
+  .piano-key.black { width: 14px; height: 8px; background: #444; z-index: 2;
+                     margin-left: -7px; margin-right: -7px; flex-shrink: 0;
+                     border-radius: 0 0 2px 2px; border: 1px solid #333; border-top: none;
+                     align-self: flex-start; margin-top: 4px; }
+  .piano-key.white.active { background: var(--active-color, var(--accent)); }
+  .piano-key.black.active { background: var(--active-color, var(--accent)); border-color: var(--active-color, var(--accent)); }
+  .piano-key-label { position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%);
+                     font-size: 0.45rem; color: #aaa; pointer-events: none; }
+  .piano-midi-btn { padding: 0.15rem 0.4rem; background: var(--bg3); border: 1px solid var(--border);
+                    border-radius: 3px; color: var(--text); font-family: inherit; font-size: 0.65rem;
+                    cursor: pointer; }
+  .piano-midi-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .piano-midi-status { font-size: 0.6rem; color: var(--text2); }
+
   /* ── Initiative tracker widget ─── */
   .initiative-tracker { padding: 0.4rem 0.6rem; }
   .initiative-list { max-height: 150px; overflow-y: auto; margin-bottom: 0.4rem; }
