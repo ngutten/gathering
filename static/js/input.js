@@ -234,6 +234,105 @@ async function uploadFiles(fileList) {
   }
 }
 
+// ── Voice message recording ──
+
+let mediaRecorder = null;
+let recordingChunks = [];
+let recordingStartTime = 0;
+let recordingTimerInterval = null;
+
+export function toggleRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Prefer webm/opus, fall back to whatever the browser supports
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    recordingChunks = [];
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) recordingChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      clearInterval(recordingTimerInterval);
+      recordingTimerInterval = null;
+
+      if (recordingChunks.length === 0) {
+        hideRecordingUI();
+        return;
+      }
+
+      const blob = new Blob(recordingChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const ext = (mediaRecorder.mimeType || '').includes('webm') ? 'webm'
+                : (mediaRecorder.mimeType || '').includes('ogg') ? 'ogg'
+                : (mediaRecorder.mimeType || '').includes('mp4') ? 'm4a' : 'webm';
+      const filename = `voice-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
+      const file = new File([blob], filename, { type: blob.type });
+      uploadFiles([file]);
+      hideRecordingUI();
+    };
+
+    mediaRecorder.start();
+    recordingStartTime = Date.now();
+    showRecordingUI();
+  } catch (err) {
+    const progress = document.getElementById('upload-progress');
+    if (err.name === 'NotAllowedError') {
+      progress.textContent = 'Microphone access denied.';
+    } else {
+      progress.textContent = `Recording failed: ${err.message}`;
+    }
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+}
+
+export function cancelRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    recordingChunks = []; // clear so onstop won't upload
+    mediaRecorder.stop();
+  }
+}
+
+function showRecordingUI() {
+  const btn = document.getElementById('record-btn');
+  btn.classList.add('recording');
+  const indicator = document.getElementById('recording-indicator');
+  indicator.style.display = 'flex';
+  const timer = document.getElementById('recording-timer');
+  recordingTimerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    timer.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+  }, 250);
+}
+
+function hideRecordingUI() {
+  const btn = document.getElementById('record-btn');
+  btn.classList.remove('recording');
+  const indicator = document.getElementById('recording-indicator');
+  indicator.style.display = 'none';
+  document.getElementById('recording-timer').textContent = '0:00';
+  mediaRecorder = null;
+  recordingChunks = [];
+}
+
 export function joinChannel() {
   const input = document.getElementById('new-channel');
   let name = input.value.trim().replace(/^#/, '').replace(/[^a-zA-Z0-9_-]/g, '');

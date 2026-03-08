@@ -228,6 +228,16 @@
                   border-radius: 3px; padding: 0.15rem 0.4rem; font-size: 0.75rem; }
   .pending-file .remove-file { cursor: pointer; color: var(--red); margin-left: 0.2rem; }
   .upload-progress { font-size: 0.7rem; color: var(--text2); margin-top: 0.2rem; }
+  .attach-btn.recording { color: var(--red); border-color: var(--red); animation: pulse-recording 1s ease-in-out infinite; }
+  @keyframes pulse-recording { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .recording-indicator { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem;
+                         font-size: 0.8rem; color: var(--red); }
+  .recording-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+                   animation: pulse-recording 1s ease-in-out infinite; }
+  .recording-timer { font-variant-numeric: tabular-nums; }
+  .recording-cancel { background: none; border: none; color: var(--text2); cursor: pointer;
+                      font-size: 0.85rem; padding: 0 0.3rem; }
+  .recording-cancel:hover { color: var(--red); }
   .chat-main { position: relative; }
   .chat-main.drop-active::after {
     content: 'Drop files to upload';

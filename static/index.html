@@ -176,6 +176,7 @@
           <div class="input-row">
             <button class="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file" aria-label="Attach file">&#x1F4CE;</button>
             <input type="file" id="file-input" style="display:none" multiple onchange="handleFileSelect(event)">
+            <button class="attach-btn" id="record-btn" onclick="toggleRecording()" title="Record voice message" aria-label="Record voice message">&#x1F3A4;</button>
             <button class="attach-btn" id="emoji-btn" onclick="toggleEmojiPicker('msg-input')" title="Emoji" aria-label="Emoji picker">&#x1F600;</button>
             <label for="msg-input" class="sr-only">Message</label>
             <textarea id="msg-input" rows="1" placeholder="Type a message..."
@@ -192,6 +193,11 @@
               </select>
             </div>
             <button class="send-btn" id="send-btn" onclick="sendMessage()">Send</button>
+          </div>
+          <div class="recording-indicator" id="recording-indicator" style="display:none">
+            <span class="recording-dot"></span>
+            <span class="recording-timer" id="recording-timer">0:00</span>
+            <button class="recording-cancel" onclick="cancelRecording()" title="Cancel">&#x2715;</button>
           </div>
           <div class="pending-files" id="pending-files"></div>
           <div class="upload-progress" id="upload-progress"></div>
