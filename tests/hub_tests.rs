@@ -11,7 +11,7 @@ use std::time::Duration;
 use axum::extract::ws::Message;
 use gathering::db::Db;
 use gathering::hub::Hub;
-use gathering::protocol::{ClientMsg, ServerMsg};
+use gathering::protocol::{ClientMsg, ServerConfig, ServerMsg};
 use tokio::sync::mpsc;
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ fn setup() -> (Hub, Arc<Db>) {
         "delete_own_message".into(),
     ]);
     db.upsert_role("admin", &["*".into()]);
-    let hub = Hub::new(db.clone(), std::path::PathBuf::from("/tmp/gathering-test"));
+    let hub = Hub::new(db.clone(), std::path::PathBuf::from("/tmp/gathering-test"), ServerConfig::default());
     (hub, db)
 }
 
@@ -41,7 +41,7 @@ async fn connect_user(hub: &Hub, db: &Db, username: &str) -> (usize, mpsc::Unbou
 
     let (tx, rx) = mpsc::unbounded_channel();
     let id = hub.connect(tx).await;
-    hub.handle_message(id, ClientMsg::Auth { token }).await;
+    hub.handle_message(id, ClientMsg::Auth { token, protocol_version: None }).await;
     (id, rx)
 }
 
@@ -86,7 +86,7 @@ async fn auth_invalid_token() {
     let (hub, _db) = setup();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let id = hub.connect(tx).await;
-    hub.handle_message(id, ClientMsg::Auth { token: "bad-token".into() }).await;
+    hub.handle_message(id, ClientMsg::Auth { token: "bad-token".into(), protocol_version: None }).await;
 
     let msgs = drain_messages(&mut rx);
     let auth = find_msg(&msgs, |m| matches!(m, ServerMsg::AuthResult { ok: false, .. }));
@@ -194,7 +194,7 @@ async fn join_restricted_channel_allowed_for_member() {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let id = hub.connect(tx).await;
-    hub.handle_message(id, ClientMsg::Auth { token }).await;
+    hub.handle_message(id, ClientMsg::Auth { token, protocol_version: None }).await;
     drain_messages(&mut rx);
 
     hub.handle_message(id, ClientMsg::Join { channel: "private".into() }).await;
@@ -396,7 +396,7 @@ async fn send_without_permission_rejected() {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let id = hub.connect(tx).await;
-    hub.handle_message(id, ClientMsg::Auth { token }).await;
+    hub.handle_message(id, ClientMsg::Auth { token, protocol_version: None }).await;
     drain_messages(&mut rx);
 
     hub.handle_message(id, ClientMsg::Send {
@@ -576,7 +576,7 @@ async fn pin_message_by_admin() {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let admin_id = hub.connect(tx).await;
-    hub.handle_message(admin_id, ClientMsg::Auth { token }).await;
+    hub.handle_message(admin_id, ClientMsg::Auth { token, protocol_version: None }).await;
     drain_messages(&mut rx);
 
     // Send a message
@@ -654,7 +654,7 @@ async fn get_pinned_messages_via_hub() {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let admin_id = hub.connect(tx).await;
-    hub.handle_message(admin_id, ClientMsg::Auth { token }).await;
+    hub.handle_message(admin_id, ClientMsg::Auth { token, protocol_version: None }).await;
     drain_messages(&mut rx);
 
     // Send and pin a message

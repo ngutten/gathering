@@ -36,7 +36,7 @@ All server state lives in a single portable directory:
 ```
 gathering-data/
 ├── gathering.db   # SQLite database (users, messages, channels)
-├── uploads/        # Shared files (Phase 3)
+├── uploads/        # Shared files
 ├── cert.pem        # TLS certificate (optional)
 └── key.pem         # TLS private key (optional)
 ```
@@ -45,13 +45,18 @@ Back up by copying this directory. Migrate by moving it to another machine.
 
 ## Features
 
-- **Channels** — create and join chat channels
-- **Message TTL** — set per-message expiry (1m to 7d, or permanent)
-- **Typing indicators** — see who's typing
-- **Online presence** — see who's connected
-- **Basic formatting** — `**bold**`, `*italic*`, `` `code` ``, ` ```code blocks``` `
-- **Argon2 auth** — password hashing with Argon2id
+- **End-to-end encryption** — libsodium-based E2E encryption with per-channel keys
+- **Channels** — public and restricted channels, direct messages
+- **Voice & video** — WebRTC voice/video calls
+- **Forum topics** — threaded discussions with replies
+- **File sharing** — encrypted uploads with per-user disk quotas
+- **Reactions & pins** — emoji reactions and pinned messages
+- **Widgets** — collaborative whiteboard, piano, dice roller, Go board, radio, initiative tracker
+- **Message TTL** — per-message expiry (1m to 7d, or permanent)
+- **Roles & permissions** — configurable admin panel with granular permissions
+- **Desktop client** — Tauri-based app with multi-server support and MIDI piano
 - **Portable storage** — single SQLite file, no database service needed
+- **Privacy by default** — usernames stripped from logs, encrypted filenames, no IP persistence
 
 ## TLS
 
@@ -76,7 +81,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo build --release
 ```
 
-Cross-platform binaries are built automatically via GitHub Actions on push to `main` or tag push.
+Cross-platform binaries are built automatically via GitHub Actions on tag push. Push a tag like `v0.1.0` to create a release with server binaries and desktop client installers.
 
 ## License
 
