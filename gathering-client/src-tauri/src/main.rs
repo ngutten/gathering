@@ -2,11 +2,19 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod midi;
+
 use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .manage(midi::MidiState::new())
+        .invoke_handler(tauri::generate_handler![
+            midi::midi_list_ports,
+            midi::midi_connect,
+            midi::midi_disconnect,
+        ])
         .setup(|app| {
             // Accept self-signed TLS certificates (common for self-hosted servers)
             #[cfg(target_os = "linux")]

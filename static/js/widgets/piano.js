@@ -3,6 +3,7 @@
 
 import { WidgetBase, registerWidget } from './widget-api.js';
 import { escapeHtml } from '../render.js';
+import { isTauri } from '../config.js';
 
 const FIRST_NOTE = 48; // C3
 const LAST_NOTE = 83;  // B5
@@ -242,6 +243,10 @@ class Piano extends WidgetBase {
   updateAndDraw(dt) {
     const canvas = document.getElementById(`piano-canvas-${this.channel}`);
     if (!canvas) return;
+    // If canvas has zero size (layout not ready yet), retry resize
+    if (canvas.width === 0 || canvas.height === 0) {
+      this.resizeCanvas();
+    }
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
@@ -485,17 +490,21 @@ class Piano extends WidgetBase {
 
   connectMidi() {
     const statusEl = document.getElementById(`piano-midi-status-${this.channel}`);
-    if (!navigator.requestMIDIAccess) {
+
+    // Try Web MIDI API first, fall back to Tauri native MIDI
+    if (navigator.requestMIDIAccess) {
+      navigator.requestMIDIAccess().then((access) => {
+        this.midiAccess = access;
+        this.bindMidiInputs();
+        access.onstatechange = () => this.bindMidiInputs();
+      }).catch(() => {
+        if (statusEl) statusEl.textContent = 'Denied';
+      });
+    } else if (isTauri && window.__TAURI_INTERNALS__) {
+      this.connectTauriMidi(statusEl);
+    } else {
       if (statusEl) statusEl.textContent = 'Not supported';
-      return;
     }
-    navigator.requestMIDIAccess().then((access) => {
-      this.midiAccess = access;
-      this.bindMidiInputs();
-      access.onstatechange = () => this.bindMidiInputs();
-    }).catch(() => {
-      if (statusEl) statusEl.textContent = 'Denied';
-    });
   }
 
   bindMidiInputs() {
@@ -513,6 +522,50 @@ class Piano extends WidgetBase {
     }
   }
 
+  async connectTauriMidi(statusEl) {
+    try {
+      const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+      const ports = await invoke('midi_list_ports');
+      if (!ports || ports.length === 0) {
+        if (statusEl) statusEl.textContent = 'No devices';
+        return;
+      }
+
+      // Skip virtual "Midi Through" ports — prefer real hardware
+      const realPorts = ports.filter(p => !/midi through/i.test(p.name));
+      const target = realPorts.length > 0 ? realPorts[0] : ports[0];
+
+      const portName = await invoke('midi_connect', { name: target.name });
+      if (statusEl) statusEl.textContent = portName;
+
+      // Set up Tauri event listener for MIDI messages from the Rust backend
+      await this.listenTauriMidiEvents(invoke);
+    } catch (e) {
+      console.warn('Tauri MIDI connect error:', e);
+      if (statusEl) statusEl.textContent = 'Error';
+    }
+  }
+
+  async listenTauriMidiEvents(invoke) {
+    const handler = (event) => {
+      const { status, note, velocity } = event.payload;
+      const cmd = status & 0xf0;
+      if (cmd === 0x90 && velocity > 0) {
+        if (note >= 21 && note <= 108) this.localNoteOn(note, velocity);
+      } else if (cmd === 0x80 || (cmd === 0x90 && velocity === 0)) {
+        if (note >= 21 && note <= 108) this.localNoteOff(note);
+      }
+    };
+    // Tauri 2 internal event API: transformCallback registers a JS function
+    // and returns an ID that the core event plugin uses to dispatch events.
+    const callbackId = window.__TAURI_INTERNALS__.transformCallback(handler);
+    this._tauriMidiUnlistenId = await invoke('plugin:event|listen', {
+      event: 'midi-message',
+      target: { kind: 'Any' },
+      handler: callbackId,
+    });
+  }
+
   handleMidiMessage(e) {
     const [status, note, velocity] = e.data;
     const cmd = status & 0xf0;
@@ -527,6 +580,10 @@ class Piano extends WidgetBase {
     if (this.animFrame) cancelAnimationFrame(this.animFrame);
     this.synth.allOff();
     for (const input of this.midiInputs) input.onmidimessage = null;
+    // Disconnect Tauri native MIDI if active
+    if (isTauri && window.__TAURI_INTERNALS__ && this._tauriMidiUnlistenId != null) {
+      window.__TAURI_INTERNALS__.invoke('midi_disconnect').catch(() => {});
+    }
     if (this._onKeyDown) document.removeEventListener('keydown', this._onKeyDown);
     if (this._onKeyUp) document.removeEventListener('keyup', this._onKeyUp);
     if (this._cleanupMouseUp) document.removeEventListener('mouseup', this._cleanupMouseUp);
