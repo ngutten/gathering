@@ -93,11 +93,17 @@ jobs:
         working-directory: gathering-client
         run: cargo tauri build
 
-      - name: List bundle output
-        if: always()
+      - name: List bundle output (Unix)
+        if: always() && runner.os != 'Windows'
         run: |
           echo "=== Bundle directory contents ==="
           find gathering-client/src-tauri/target/release/bundle -type f 2>/dev/null || echo "No bundle directory found"
+
+      - name: List bundle output (Windows)
+        if: always() && runner.os == 'Windows'
+        run: |
+          echo "=== Bundle directory contents ==="
+          Get-ChildItem -Recurse gathering-client/src-tauri/target/release/bundle -ErrorAction SilentlyContinue | Where-Object { !$_.PSIsContainer } | Select-Object -ExpandProperty FullName
 
       - name: Collect artifacts (Linux)
         if: runner.os == 'Linux'
