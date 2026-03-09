@@ -60,6 +60,17 @@ Back up by copying this directory. Migrate by moving it to another machine.
 - **Portable storage** — single SQLite file, no database service needed
 - **Privacy by default** — usernames stripped from logs, encrypted filenames, no IP persistence
 
+## CLI client
+
+A minimal terminal client for scripting, headless environments, or quick access:
+
+```bash
+pip install websockets
+python3 gathering-cli.py https://your-server:9123 -k -c general youruser
+```
+
+Supports `/join <channel>` to switch channels, `/quit` to exit. Pipe-friendly — stdout has chat only, stderr has status. See `gathering-cli.py -h` for all options.
+
 ## TLS
 
 For production, either:

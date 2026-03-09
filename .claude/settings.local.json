@@ -8,7 +8,12 @@
       "Bash(cargo check:*)",
       "Bash(git:*)",
       "Bash(cargo test:*)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(cargo tauri:*)",
+      "Bash(python3:*)",
+      "Bash(cp /home/claude/gathering/gathering-cli.py /home/claude/tools/gathering-cli.py)",
+      "Bash(mv /home/claude/gathering/gathering-watch.py /home/claude/tools/gathering-watch.py)",
+      "Read(//home/claude/tools/**)"
     ]
   }
 }
