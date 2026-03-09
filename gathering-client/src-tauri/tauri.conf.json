@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickelpack/tauri/v2/crates/tauri-cli/schema.json",
   "productName": "Gathering",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.gathering.client",
   "build": {
     "frontendDist": "../../static"
@@ -17,6 +17,12 @@
       }
     ],
     "security": {}
+  },
+  "bundle": {
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
   },
   "plugins": {}
 }

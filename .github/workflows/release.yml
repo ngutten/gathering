@@ -93,30 +93,37 @@ jobs:
         working-directory: gathering-client
         run: cargo tauri build
 
+      - name: List bundle output
+        if: always()
+        run: |
+          echo "=== Bundle directory contents ==="
+          find gathering-client/src-tauri/target/release/bundle -type f 2>/dev/null || echo "No bundle directory found"
+
       - name: Collect artifacts (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp gathering-client/src-tauri/target/release/bundle/deb/*.deb dist/ 2>/dev/null || true
+          cp gathering-client/src-tauri/target/release/bundle/deb/*.deb dist/
           cp gathering-client/src-tauri/target/release/bundle/appimage/*.AppImage dist/ 2>/dev/null || true
 
       - name: Collect artifacts (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist
-          cp -r gathering-client/src-tauri/target/release/bundle/dmg/*.dmg dist/ 2>/dev/null || true
+          cp gathering-client/src-tauri/target/release/bundle/dmg/*.dmg dist/
 
       - name: Collect artifacts (Windows)
         if: runner.os == 'Windows'
         run: |
           mkdir dist
+          Copy-Item gathering-client/src-tauri/target/release/bundle/nsis/*.exe dist/
           Copy-Item gathering-client/src-tauri/target/release/bundle/msi/*.msi dist/ -ErrorAction SilentlyContinue
-          Copy-Item gathering-client/src-tauri/target/release/bundle/nsis/*.exe dist/ -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: dist/*
+          if-no-files-found: error
 
   release:
     needs: [build-server, build-client]
