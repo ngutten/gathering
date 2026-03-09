@@ -2,6 +2,8 @@
 
 Self-hosted, encrypted chat server. Single binary, single SQLite file, no external dependencies.
 
+![Gathering screenshot](images/gathering-screenshot.png)
+
 ## Quick start
 
 ```bash

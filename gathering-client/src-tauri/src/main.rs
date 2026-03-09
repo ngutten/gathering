@@ -5,6 +5,9 @@
 mod midi;
 
 use tauri::Manager;
+use tauri::tray::TrayIconBuilder;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::image::Image;
 
 fn main() {
     tauri::Builder::default()
@@ -16,7 +19,49 @@ fn main() {
             midi::midi_disconnect,
         ])
         .setup(|app| {
-            // Accept self-signed TLS certificates (common for self-hosted servers)
+            // ── System tray ──────────────────────────────────────
+            let show = MenuItemBuilder::with_id("show", "Show Gathering").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .item(&show)
+                .separator()
+                .item(&quit)
+                .build()?;
+
+            let icon = Image::from_path("icons/icon.png")
+                .unwrap_or_else(|_| Image::from_bytes(include_bytes!("../icons/icon.png")).expect("embedded icon"));
+
+            TrayIconBuilder::new()
+                .icon(icon)
+                .tooltip("Gathering")
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, .. } = event {
+                        if let Some(w) = tray.app_handle().get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.unminimize();
+                            let _ = w.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // ── Linux: accept self-signed TLS, auto-grant media permissions ──
             #[cfg(target_os = "linux")]
             {
                 let window = app.get_webview_window("main").unwrap();
