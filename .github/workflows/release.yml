@@ -66,7 +66,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: gathering-client-linux
+            artifact: gathering-client-linux-x86_64
+          - os: ubuntu-24.04-arm
+            artifact: gathering-client-linux-arm64
           - os: macos-latest
             artifact: gathering-client-macos
           - os: windows-latest
