@@ -23,6 +23,10 @@
   // ── Server snapshots (in-memory, per-server state) ──
   const serverSnapshots = {};
 
+  // ── Server health tracking ──
+  const serverOnlineStatus = {}; // url -> boolean (true = online, false = offline)
+  let healthCheckTimer = null;
+
   // ── Color hash for server icons ──
   function serverColor(url) {
     let hash = 0;
@@ -190,13 +194,16 @@
       const brandName = (isActive && st && st.serverName) ? st.serverName : null;
       const displayName = brandName || serverDisplayName(url);
 
-      html += `<div class="server-icon${isActive ? ' active' : ''}" data-url="${escapeText(url)}" title="${escapeText(displayName)}">`;
+      const isOffline = serverOnlineStatus[url] === false;
+      const offlineClass = isOffline ? ' offline' : '';
+      html += `<div class="server-icon${isActive ? ' active' : ''}${offlineClass}" data-url="${escapeText(url)}" title="${escapeText(displayName)}${isOffline ? ' (offline)' : ''}">`;
       if (hasIcon) {
         html += `<img class="server-icon-circle" src="${escapeText(st.serverIcon)}" alt="${escapeText(displayName)}" style="object-fit:cover;">`;
       } else {
         html += `<div class="server-icon-circle" style="background:${color};">${label}</div>`;
       }
       if (hasToken) html += '<div class="server-indicator"></div>';
+      html += '<div class="server-offline-dot"></div>';
       html += '</div>';
     });
 
@@ -421,6 +428,88 @@
     urlInput.focus();
   }
 
+  // ── Server health checks (non-active servers) ──
+  async function checkServerHealth(url) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(url + '/api/server-info', { signal: controller.signal });
+      clearTimeout(timeout);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function runHealthChecks() {
+    const s = store();
+    if (!s) return;
+    const history = s.getServerHistory();
+    const activeUrl = s.getActiveServer();
+    let changed = false;
+    for (const url of history) {
+      if (url === activeUrl) continue; // active server status comes from WS
+      const online = await checkServerHealth(url);
+      if (serverOnlineStatus[url] !== online) {
+        serverOnlineStatus[url] = online;
+        changed = true;
+      }
+    }
+    if (changed) renderServerRail();
+  }
+
+  function startHealthChecks() {
+    if (healthCheckTimer) return;
+    runHealthChecks();
+    healthCheckTimer = setInterval(runHealthChecks, 30000);
+  }
+
+  // Track active server status from WS connection state
+  function onConnectionStateChange(s) {
+    const st = store();
+    if (!st) return;
+    const activeUrl = st.getActiveServer();
+    if (!activeUrl) return;
+    const wasOnline = serverOnlineStatus[activeUrl];
+    serverOnlineStatus[activeUrl] = (s === 'connected');
+    if (wasOnline !== serverOnlineStatus[activeUrl]) {
+      renderServerRail();
+      updateOfflineOverlay();
+    }
+  }
+
+  function updateOfflineOverlay() {
+    const st = store();
+    if (!st) return;
+    const activeUrl = st.getActiveServer();
+    const isOffline = activeUrl && serverOnlineStatus[activeUrl] === false;
+    let overlay = document.getElementById('server-offline-overlay');
+    if (isOffline) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'server-offline-overlay';
+        overlay.className = 'server-offline-overlay';
+        overlay.textContent = 'Server offline';
+        const layout = document.querySelector('.layout');
+        if (layout) layout.style.position = 'relative';
+        if (layout) layout.appendChild(overlay);
+      }
+    } else {
+      if (overlay) overlay.remove();
+    }
+  }
+
+  // Listen for connection state events from transport.js module
+  // We need to poll for the event emitter since tauri-bridge loads before ES modules
+  function wireConnectionEvents() {
+    if (window._gatheringState && window._gatheringState._onConnectionState) {
+      window._gatheringState._onConnectionState(onConnectionStateChange);
+    } else {
+      // Fallback: check periodically
+      setTimeout(wireConnectionEvents, 200);
+    }
+  }
+
   // ── Initialization ──
   function init() {
     const s = store();
@@ -453,6 +542,8 @@
     // Render rail once DOM is ready
     renderServerRail();
     updateAuthServerInfo();
+    startHealthChecks();
+    wireConnectionEvents();
   }
 
   if (document.readyState === 'loading') {
@@ -461,6 +552,31 @@
     // Storage module might not be loaded yet if script runs before modules
     setTimeout(init, 0);
   }
+
+  // ── Tray badge: track unread state and update native tray icon ──
+  let lastBadgeState = false;
+  async function updateTrayBadge(hasUnread) {
+    if (hasUnread === lastBadgeState) return;
+    lastBadgeState = hasUnread;
+    try {
+      const { invoke } = window.__TAURI_INTERNALS__;
+      await invoke('set_unread_badge', { hasUnread });
+    } catch (e) {
+      console.warn('[tray] badge update failed:', e);
+    }
+  }
+
+  // Poll unread counts to update tray badge
+  function checkUnreadForBadge() {
+    const st = window._gatheringState;
+    if (!st) return;
+    const counts = st.unreadCounts || {};
+    const hasUnread = Object.values(counts).some(c => c > 0);
+    updateTrayBadge(hasUnread);
+  }
+
+  // Check every 2 seconds (lightweight, just reads in-memory state)
+  setInterval(checkUnreadForBadge, 2000);
 
   // Expose for onclick handlers and module bridge
   window.configureServer = showAddServerModal;

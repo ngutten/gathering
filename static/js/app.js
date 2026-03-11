@@ -1,7 +1,7 @@
 // app.js — Entry point: imports all modules, wires events, auto-connects
 
 import state, { on, snapshotState, restoreState, resetState } from './state.js';
-import { connectWS } from './transport.js';
+import { connectWS, getConnectionState } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
 import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner } from './chat-ui.js';
@@ -38,6 +38,28 @@ on('ws-closed', () => {
   if (state.inVoiceChannel) cleanupVoice();
 });
 on('channel-switched', widgetChannelSwitch);
+
+// ── Connection status banner ──
+on('connection-state', (s) => {
+  let banner = document.getElementById('connection-banner');
+  if (s === 'connected') {
+    if (banner) banner.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'connection-banner';
+    const chatScreen = document.getElementById('chat-screen');
+    if (chatScreen) chatScreen.prepend(banner);
+  }
+  if (s === 'connecting') {
+    banner.className = 'connection-banner connecting';
+    banner.textContent = 'Reconnecting...';
+  } else {
+    banner.className = 'connection-banner disconnected';
+    banner.textContent = 'Disconnected \u2014 attempting to reconnect...';
+  }
+});
 
 // ── Expose functions to window for inline onclick handlers ──
 window.doLogin = doLogin;
@@ -235,6 +257,11 @@ window._cleanupVoice = cleanupVoice;
 window._checkServerInfo = checkServerInfo;
 import { clearUserPresence } from './widgets/widget-api.js';
 window._clearUserPresence = clearUserPresence;
+
+// Expose connection state change callback registration for tauri-bridge
+const connectionStateCallbacks = [];
+state._onConnectionState = (fn) => connectionStateCallbacks.push(fn);
+on('connection-state', (s) => connectionStateCallbacks.forEach(fn => fn(s)));
 
 // Re-render server rail after auth success (to update login indicator)
 on('server-message', (msg) => {

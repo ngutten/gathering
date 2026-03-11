@@ -1004,41 +1004,79 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     let client_id = state.hub.connect(tx).await;
     tracing::debug!("WebSocket connected: id={}", client_id);
 
-    // Forward hub messages to WebSocket
+    // Forward hub messages to WebSocket, interleaved with periodic pings
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if ws_tx.send(msg).await.is_err() {
-                break;
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        ping_interval.tick().await; // consume the immediate first tick
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(m) => { if ws_tx.send(m).await.is_err() { break; } }
+                        None => break,
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    if ws_tx.send(Message::Ping(vec![b'k', b'a'])).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Track last pong time for idle detection
+    let last_pong = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let last_pong2 = last_pong.clone();
+
+    // Watchdog: if no pong received within 90s, assume dead connection
+    let watchdog = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+            let elapsed = last_pong2.lock().unwrap().elapsed();
+            if elapsed > std::time::Duration::from_secs(90) {
+                break; // connection is dead
             }
         }
     });
 
     // Receive from WebSocket, route to hub
-    while let Some(Ok(msg)) = ws_rx.next().await {
-        match msg {
-            Message::Text(text) => {
-                match serde_json::from_str::<ClientMsg>(&text) {
-                    Ok(client_msg) => {
-                        state.hub.handle_message(client_id, client_msg).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Bad message from {}: {}", client_id, e);
-                        // Try to extract the message type so the client gets
-                        // actionable feedback instead of silent failure.
-                        let msg_type = serde_json::from_str::<serde_json::Value>(&text)
-                            .ok()
-                            .and_then(|v| v.get("type")?.as_str().map(String::from));
-                        if let Some(t) = msg_type {
-                            state.hub.send_client_error(
-                                client_id,
-                                &format!("unsupported_message: {}", t),
-                            ).await;
+    let recv_loop = async {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            match msg {
+                Message::Text(text) => {
+                    match serde_json::from_str::<ClientMsg>(&text) {
+                        Ok(client_msg) => {
+                            state.hub.handle_message(client_id, client_msg).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Bad message from {}: {}", client_id, e);
+                            let msg_type = serde_json::from_str::<serde_json::Value>(&text)
+                                .ok()
+                                .and_then(|v| v.get("type")?.as_str().map(String::from));
+                            if let Some(t) = msg_type {
+                                state.hub.send_client_error(
+                                    client_id,
+                                    &format!("unsupported_message: {}", t),
+                                ).await;
+                            }
                         }
                     }
                 }
+                Message::Pong(_) => {
+                    *last_pong.lock().unwrap() = Instant::now();
+                }
+                Message::Close(_) => break,
+                _ => {}
             }
-            Message::Close(_) => break,
-            _ => {}
+        }
+    };
+
+    // Wait for either the receive loop to end or the watchdog to fire
+    tokio::select! {
+        _ = recv_loop => {}
+        _ = watchdog => {
+            tracing::debug!("WebSocket pong timeout: id={}", client_id);
         }
     }
 

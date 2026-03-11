@@ -53,8 +53,31 @@
                 min-height: 1.2rem; }
 
   /* ── Chat layout ─── */
-  #chat-screen { display: none; flex: 1; height: 100%; }
-  .layout { display: flex; height: 100%; width: 100%; flex: 1; }
+  #chat-screen { display: none; flex: 1; height: 100%; flex-direction: column; }
+  .layout { display: flex; height: 100%; width: 100%; flex: 1; min-height: 0; }
+
+  /* ── Connection status banner ── */
+  .connection-banner {
+    padding: 4px 12px; font-size: 0.75rem; text-align: center;
+    flex-shrink: 0; z-index: 100;
+  }
+  .connection-banner.disconnected { background: #b71c1c; color: #fff; }
+  .connection-banner.connecting { background: #e65100; color: #fff; }
+
+  /* ── Server offline overlay (Tauri) ── */
+  .server-offline-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text2); font-size: 0.9rem; pointer-events: none;
+  }
+  .server-icon.offline .server-icon-circle { opacity: 0.35; filter: grayscale(1); }
+  .server-icon .server-offline-dot {
+    display: none; position: absolute; bottom: 2px; right: 2px;
+    width: 8px; height: 8px; border-radius: 50%; background: #b71c1c;
+    border: 1.5px solid #0a0e14;
+  }
+  .server-icon.offline .server-offline-dot { display: block; }
 
   /* ── Server Rail (Tauri multi-server) ── */
   .server-rail { display: none; }
