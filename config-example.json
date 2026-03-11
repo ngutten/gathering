@@ -1,9 +1,9 @@
 {
   "port": 9123,
-  "http_port": 8080,
+  "http_port": null,
   "server_name": "My Gathering Server",
-  "server_icon": "/uploads/server-icon.png",
-  "admins": ["alice"],
+  "server_icon": null,
+  "admins": [],
   "registration_mode": "open",
   "channel_creation": "all",
   "allow_key_backup": true,
