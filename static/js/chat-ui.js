@@ -41,7 +41,18 @@ export function refreshAllMessageActions() {
     const newHtml = buildMsgActionsHtml({ id: msgId, author, channel, pinned });
     const tmp = document.createElement('div');
     tmp.innerHTML = newHtml;
-    oldActions.replaceWith(tmp.firstElementChild);
+    const newActions = tmp.firstElementChild;
+    oldActions.replaceWith(newActions);
+    // Re-wire the reaction picker button (handler was lost during DOM replacement)
+    const reactBtn = newActions.querySelector('.react-btn');
+    if (reactBtn) {
+      reactBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openReactionPicker(reactBtn, (emoji) => {
+          send('AddReaction', { message_id: msgId, emoji });
+        });
+      });
+    }
   });
 }
 
