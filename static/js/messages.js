@@ -16,26 +16,6 @@ import { showNotification, renderNotificationSettings } from './notifications.js
 import { isTauri, CLIENT_PROTOCOL_VERSION } from './config.js';
 import { scopedRemove } from './storage.js';
 
-// Deduplication: track recently seen message IDs to avoid duplicates on reconnect
-const recentMessageIds = new Set();
-const MAX_RECENT_IDS = 500;
-
-function trackMessageId(id) {
-  if (!id) return false; // no id = can't dedup
-  if (recentMessageIds.has(id)) return true; // duplicate
-  recentMessageIds.add(id);
-  if (recentMessageIds.size > MAX_RECENT_IDS) {
-    // Remove oldest entries (Set iterates in insertion order)
-    const iter = recentMessageIds.values();
-    for (let i = 0; i < 100; i++) iter.next();
-    // Rebuild with remaining
-    const arr = [...recentMessageIds];
-    recentMessageIds.clear();
-    arr.slice(100).forEach(v => recentMessageIds.add(v));
-  }
-  return false; // not a duplicate
-}
-
 function updateSidebarTitle() {
   const sidebarTitle = document.querySelector('.sidebar-header h2');
   if (sidebarTitle && state.serverName) {
@@ -90,7 +70,6 @@ export function handleServerMsg(msg) {
       break;
 
     case 'Message':
-      if (trackMessageId(msg.id)) break; // deduplicate
       appendMessage(msg);
       if (msg.channel && msg.channel !== state.currentChannel && msg.author !== state.currentUser) {
         state.unreadCounts[msg.channel] = (state.unreadCounts[msg.channel] || 0) + 1;
@@ -121,10 +100,7 @@ export function handleServerMsg(msg) {
         if (state.encryptedChannels.has(msg.channel) && !state.channelKeys[msg.channel] && msg.messages.some(m => m.encrypted)) {
           appendSystem('Waiting for an existing member to come online and share the channel key...');
         }
-        msg.messages.forEach(m => {
-          if (m.id) trackMessageId(m.id); // register IDs so live messages don't duplicate
-          appendMessage({ ...m, channel: msg.channel });
-        });
+        msg.messages.forEach(m => appendMessage({ ...m, channel: msg.channel }));
       }
       break;
 

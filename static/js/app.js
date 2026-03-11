@@ -1,7 +1,7 @@
 // app.js — Entry point: imports all modules, wires events, auto-connects
 
 import state, { on, snapshotState, restoreState, resetState } from './state.js';
-import { connectWS, getConnectionState } from './transport.js';
+import { connectWS, disconnectWS, getConnectionState } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
 import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner } from './chat-ui.js';
@@ -253,6 +253,7 @@ window._snapshotState = snapshotState;
 window._restoreState = restoreState;
 window._resetState = resetState;
 window._connectWS = connectWS;
+window._disconnectWS = disconnectWS;
 window._cleanupVoice = cleanupVoice;
 window._checkServerInfo = checkServerInfo;
 import { clearUserPresence } from './widgets/widget-api.js';

@@ -2,7 +2,7 @@
 
 import state from './state.js';
 import { apiUrl } from './config.js';
-import { connectWS } from './transport.js';
+import { connectWS, disconnectWS } from './transport.js';
 import { apiFetch } from './transport.js';
 import { scopedSet, scopedRemove } from './storage.js';
 
@@ -76,11 +76,7 @@ export async function doLogout() {
   } catch (e) {}
   scopedRemove('token');
   state.token = null;
-  if (state.ws) {
-    state.ws.onclose = null; // prevent auto-reconnect
-    state.ws.close();
-    state.ws = null;
-  }
+  disconnectWS();
   document.getElementById('chat-screen').style.display = 'none';
   document.getElementById('auth-screen').style.display = 'flex';
   document.getElementById('password').value = '';

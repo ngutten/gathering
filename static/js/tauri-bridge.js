@@ -81,12 +81,9 @@
         serverSnapshots[currentUrl] = window._snapshotState();
       }
 
-      // Close WebSocket cleanly
-      if (state.ws) {
-        state.ws.onmessage = null;
-        state.ws.onclose = null;
-        state.ws.close();
-        state.ws = null;
+      // Close WebSocket cleanly — this cancels reconnect timers and pong watchdog
+      if (window._disconnectWS) {
+        window._disconnectWS();
       }
 
       // Reset state
@@ -269,11 +266,7 @@
         // If this is the active server, show auth screen
         if (s.getActiveServer() === url && window._gatheringState) {
           window._gatheringState.token = null;
-          if (window._gatheringState.ws) {
-            window._gatheringState.ws.onclose = null;
-            window._gatheringState.ws.close();
-            window._gatheringState.ws = null;
-          }
+          if (window._disconnectWS) window._disconnectWS();
           document.getElementById('chat-screen').style.display = 'none';
           document.getElementById('auth-screen').style.display = 'flex';
         }

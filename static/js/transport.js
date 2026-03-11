@@ -20,23 +20,59 @@ function setConnectionState(s) {
 
 export function getConnectionState() { return connectionState; }
 
-export function connectWS() {
+/**
+ * Close the current WebSocket and cancel all reconnect/pong timers.
+ * After this call, no automatic reconnection will happen until connectWS() is called.
+ */
+export function disconnectWS() {
+  // Cancel pending reconnect
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
-    return; // already connected or connecting
+  clearPongTimer();
+  reconnectAttempts = 0;
+
+  // Close existing socket without triggering auto-reconnect
+  if (state.ws) {
+    state.ws.onmessage = null;
+    state.ws.onclose = null;
+    state.ws.onerror = null;
+    state.ws.close();
+    state.ws = null;
+  }
+
+  setConnectionState('disconnected');
+}
+
+export function connectWS() {
+  // Cancel any pending reconnect from a previous connection
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  clearPongTimer();
+
+  // Close any existing socket first (prevents orphaned sockets)
+  if (state.ws) {
+    const old = state.ws;
+    old.onmessage = null;
+    old.onclose = null;
+    old.onerror = null;
+    old.close();
+    state.ws = null;
   }
 
   setConnectionState('connecting');
-  state.ws = new WebSocket(wsUrl());
+  const ws = new WebSocket(wsUrl());
+  state.ws = ws;
 
-  state.ws.onopen = () => {
-    state.ws.send(JSON.stringify({ type: 'Auth', token: state.token, protocol_version: CLIENT_PROTOCOL_VERSION }));
+  ws.onopen = () => {
+    // Guard: if we've been replaced by a newer connectWS() call, bail out
+    if (state.ws !== ws) { ws.close(); return; }
+    ws.send(JSON.stringify({ type: 'Auth', token: state.token, protocol_version: CLIENT_PROTOCOL_VERSION }));
     reconnectAttempts = 0;
     setConnectionState('connected');
     resetPongTimer();
   };
 
-  state.ws.onmessage = (e) => {
+  ws.onmessage = (e) => {
+    // Guard: ignore messages from orphaned sockets
+    if (state.ws !== ws) return;
     try {
       const msg = JSON.parse(e.data);
       if (!msg || !msg.type) {
@@ -51,14 +87,17 @@ export function connectWS() {
     resetPongTimer();
   };
 
-  state.ws.onclose = () => {
+  ws.onclose = () => {
+    // Guard: if this socket has been replaced, don't touch state or reconnect
+    if (state.ws !== ws) return;
+    state.ws = null;
     clearPongTimer();
     setConnectionState('disconnected');
     emit('ws-closed');
     scheduleReconnect();
   };
 
-  state.ws.onerror = () => {
+  ws.onerror = () => {
     // onclose will fire after onerror, so reconnect is handled there
   };
 }
