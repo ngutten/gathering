@@ -12,6 +12,39 @@ const TYPING_INDICATOR_TIMEOUT_MS = 3000;
 const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
 const MSG_GROUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
+// ── Build action buttons HTML for a message ──
+
+function buildMsgActionsHtml(msg) {
+  const isOwn = msg.author === state.currentUser;
+  const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[msg.channel || state.currentChannel] === state.currentUser);
+  const isEncrypted = state.encryptedChannels.has(msg.channel || state.currentChannel);
+  let html = '<div class="msg-actions" role="toolbar" aria-label="Message actions">';
+  if (!isEncrypted) html += `<button class="react-btn" data-msg-id="${msg.id}" aria-label="Add reaction">+&#x1F600;</button>`;
+  html += `<button onclick="startReply('${msg.id}')" aria-label="Reply">reply</button>`;
+  if (canPin) html += `<button onclick="togglePinMessage('${msg.id}')" aria-label="${msg.pinned ? 'Unpin' : 'Pin'} message">${msg.pinned ? 'unpin' : 'pin'}</button>`;
+  if (isOwn) html += `<button onclick="startEditMessage('${msg.id}')" aria-label="Edit message">edit</button>`;
+  if (isOwn || state.isAdmin) html += `<button class="del-btn" onclick="deleteMessage('${msg.id}')" aria-label="Delete message">del</button>`;
+  html += '</div>';
+  return html;
+}
+
+// Rebuild action buttons on all visible messages (called after AuthResult sets currentUser)
+export function refreshAllMessageActions() {
+  document.querySelectorAll('#messages .msg').forEach(div => {
+    const msgId = div.getAttribute('data-msg-id');
+    const author = div.getAttribute('data-author');
+    const channel = div.getAttribute('data-channel') || state.currentChannel;
+    const pinned = div.querySelector('.pinned-badge') !== null;
+    if (!msgId || !author) return;
+    const oldActions = div.querySelector('.msg-actions');
+    if (!oldActions) return;
+    const newHtml = buildMsgActionsHtml({ id: msgId, author, channel, pinned });
+    const tmp = document.createElement('div');
+    tmp.innerHTML = newHtml;
+    oldActions.replaceWith(tmp.firstElementChild);
+  });
+}
+
 // ── Accessibility: modal focus management ──
 
 let _previousFocus = null;
@@ -94,17 +127,8 @@ export function appendMessage(msg) {
   const attachHtml = renderAttachmentsHtml(msg.attachments);
 
   // Action buttons
-  let actionsHtml = '';
-  const isOwn = msg.author === state.currentUser;
-  const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[msg.channel || state.currentChannel] === state.currentUser);
-  const isEncrypted = state.encryptedChannels.has(msg.channel || state.currentChannel);
-  actionsHtml = '<div class="msg-actions" role="toolbar" aria-label="Message actions">';
-  if (!isEncrypted) actionsHtml += `<button class="react-btn" data-msg-id="${msg.id}" aria-label="Add reaction">+&#x1F600;</button>`;
-  actionsHtml += `<button onclick="startReply('${msg.id}')" aria-label="Reply">reply</button>`;
-  if (canPin) actionsHtml += `<button onclick="togglePinMessage('${msg.id}')" aria-label="${msg.pinned ? 'Unpin' : 'Pin'} message">${msg.pinned ? 'unpin' : 'pin'}</button>`;
-  if (isOwn) actionsHtml += `<button onclick="startEditMessage('${msg.id}')" aria-label="Edit message">edit</button>`;
-  if (isOwn || state.isAdmin) actionsHtml += `<button class="del-btn" onclick="deleteMessage('${msg.id}')" aria-label="Delete message">del</button>`;
-  actionsHtml += '</div>';
+  const actionsHtml = buildMsgActionsHtml(msg);
+
 
   // Reply reference bar
   let replyHtml = '';

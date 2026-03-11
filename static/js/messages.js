@@ -3,7 +3,7 @@
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64, showRestorePrompt } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM, refreshAllMessageActions } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -54,6 +54,8 @@ export function handleServerMsg(msg) {
         }
         initE2E().then(() => updateKeyUI());
         send('GetPreferences', {});
+        // Rebuild hover action buttons now that currentUser/isAdmin are set
+        refreshAllMessageActions();
         // Trigger widget presence check for the default channel
         emit('channel-switched', state.currentChannel);
 
@@ -666,6 +668,10 @@ export function handleServerMsg(msg) {
 
     case 'ServerShutdown':
       appendSystem(`Server shutting down: ${msg.reason}`);
+      break;
+
+    case 'Ping':
+      // Application-level keepalive — no action needed (resets pong timer in transport.js)
       break;
 
     default:

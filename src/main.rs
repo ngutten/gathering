@@ -1020,6 +1020,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     if ws_tx.send(Message::Ping(vec![b'k', b'a'])).await.is_err() {
                         break;
                     }
+                    // Also send an application-level keepalive so the browser JS
+                    // onmessage handler fires (protocol-level Ping frames are
+                    // invisible to the WebSocket JS API).
+                    let _ = ws_tx.send(Message::Text("{\"type\":\"Ping\"}".into())).await;
                 }
             }
         }
