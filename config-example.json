@@ -1,0 +1,24 @@
+{
+  "port": 9123,
+  "http_port": 8080,
+  "server_name": "My Gathering Server",
+  "server_icon": "/uploads/server-icon.png",
+  "admins": ["alice"],
+  "registration_mode": "open",
+  "channel_creation": "all",
+  "allow_key_backup": true,
+  "enabled_widgets": null,
+  "default_roles": {
+    "user": [
+      "send_message",
+      "edit_own_message",
+      "delete_own_message",
+      "create_topic",
+      "edit_own_topic",
+      "delete_own_topic",
+      "create_channel",
+      "upload_file"
+    ],
+    "admin": ["*"]
+  }
+}

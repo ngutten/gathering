@@ -328,6 +328,11 @@ function createReactionPicker() {
       reactionPickerEl.style.display = 'none';
     }
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && reactionPickerEl && reactionPickerEl.style.display !== 'none') {
+      reactionPickerEl.style.display = 'none';
+    }
+  });
 
   return el;
 }
