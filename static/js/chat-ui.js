@@ -1085,11 +1085,7 @@ export function initContextMenu() {
   menu.style.display = 'none';
   document.body.appendChild(menu);
 
-  messagesEl.addEventListener('contextmenu', (e) => {
-    const msgEl = e.target.closest('.msg[data-msg-id]');
-    if (!msgEl) return;
-
-    e.preventDefault();
+  function showContextMenu(msgEl, x, y) {
     const msgId = msgEl.getAttribute('data-msg-id');
     const author = msgEl.getAttribute('data-author');
     const isOwn = author === state.currentUser;
@@ -1113,13 +1109,13 @@ export function initContextMenu() {
     menu.innerHTML = items;
     menu.style.display = 'block';
 
-    // Position near click, but keep on screen
-    const x = Math.min(e.clientX, window.innerWidth - 160);
-    const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10);
-    menu.style.left = x + 'px';
-    menu.style.top = y + 'px';
+    // Position near tap/click, but keep on screen
+    const menuX = Math.min(x, window.innerWidth - 160);
+    const menuY = Math.min(y, window.innerHeight - menu.offsetHeight - 10);
+    menu.style.left = menuX + 'px';
+    menu.style.top = menuY + 'px';
 
-    const handleAction = (ev) => {
+    menu.onclick = (ev) => {
       // Quick-react emoji buttons
       const emojiBtn = ev.target.closest('.ctx-react-emoji');
       if (emojiBtn) {
@@ -1135,7 +1131,6 @@ export function initContextMenu() {
       switch (action) {
         case 'reply': window.startReply(msgId); break;
         case 'react': {
-          // Open full reaction picker anchored to the message
           const reactBtn = msgEl.querySelector('.react-btn');
           if (reactBtn) {
             reactBtn.click();
@@ -1151,11 +1146,52 @@ export function initContextMenu() {
         case 'delete': window.deleteMessage(msgId); break;
       }
     };
+  }
 
-    menu.onclick = handleAction;
+  // Desktop: right-click
+  messagesEl.addEventListener('contextmenu', (e) => {
+    const msgEl = e.target.closest('.msg[data-msg-id]');
+    if (!msgEl) return;
+    e.preventDefault();
+    showContextMenu(msgEl, e.clientX, e.clientY);
   });
 
-  // Dismiss on click elsewhere or Escape
+  // Mobile: long-press (500ms)
+  let longPressTimer = null;
+  let longPressFired = false;
+
+  messagesEl.addEventListener('touchstart', (e) => {
+    const msgEl = e.target.closest('.msg[data-msg-id]');
+    if (!msgEl) return;
+    longPressFired = false;
+    const touch = e.touches[0];
+    const tx = touch.clientX, ty = touch.clientY;
+    longPressTimer = setTimeout(() => {
+      longPressFired = true;
+      showContextMenu(msgEl, tx, ty);
+    }, 500);
+  }, { passive: true });
+
+  messagesEl.addEventListener('touchmove', () => {
+    // Cancel long press if finger moves (user is scrolling)
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  }, { passive: true });
+
+  messagesEl.addEventListener('touchend', (e) => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    // Prevent the tap from immediately dismissing the menu or triggering links
+    if (longPressFired) {
+      e.preventDefault();
+      longPressFired = false;
+    }
+  });
+
+  messagesEl.addEventListener('touchcancel', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    longPressFired = false;
+  });
+
+  // Dismiss on click/tap elsewhere or Escape
   document.addEventListener('click', (e) => {
     if (!menu.contains(e.target)) menu.style.display = 'none';
   });
