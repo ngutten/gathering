@@ -122,6 +122,8 @@
       </div>
       <div class="search-results" id="search-results" style="display:none;"></div>
 
+      <div class="anon-banner" id="anon-banner" style="display:none;">&#x1F3AD; Anonymous mode &mdash; messages are not attributed</div>
+
       <!-- Widget panel -->
       <div class="widget-panel" id="widget-panel" style="display:none;"></div>
 
@@ -163,17 +165,7 @@
             <label for="msg-input" class="sr-only">Message</label>
             <textarea id="msg-input" rows="1" placeholder="Type a message..."
                       onkeydown="handleInputKey(event)"></textarea>
-            <div class="ttl-control">
-              <label>TTL</label>
-              <select id="ttl-select">
-                <option value="">&infin;</option>
-                <option value="60">1m</option>
-                <option value="300">5m</option>
-                <option value="3600">1h</option>
-                <option value="86400">1d</option>
-                <option value="604800">7d</option>
-              </select>
-            </div>
+            <button class="ghost-btn" id="ghost-btn" title="Ghost mode (messages auto-expire)">&#x1F47B;</button>
             <button class="send-btn" id="send-btn" onclick="sendMessage()">Send</button>
           </div>
           <div class="recording-indicator" id="recording-indicator" style="display:none">
@@ -198,17 +190,7 @@
           <div class="input-row" style="margin-top:0.4rem;">
             <button class="attach-btn" onclick="document.getElementById('topic-file-input').click()" title="Attach file">&#x1F4CE;</button>
             <input type="file" id="topic-file-input" style="display:none" multiple onchange="handleTopicFileSelect(event)">
-            <div class="ttl-control">
-              <label>TTL</label>
-              <select id="topic-ttl-select">
-                <option value="">&infin;</option>
-                <option value="60">1m</option>
-                <option value="300">5m</option>
-                <option value="3600">1h</option>
-                <option value="86400">1d</option>
-                <option value="604800">7d</option>
-              </select>
-            </div>
+            <button class="ghost-btn" id="topic-ghost-btn" title="Ghost mode (topic auto-expires)">&#x1F47B;</button>
             <button class="send-btn" onclick="createTopic()" style="flex:1;">Create Topic</button>
           </div>
           <div class="pending-files" id="topic-pending-files"></div>
@@ -236,17 +218,7 @@
             <input type="file" id="reply-file-input" style="display:none" multiple onchange="handleReplyFileSelect(event)">
             <textarea id="reply-input" rows="1" placeholder="Write a reply..."
                       onkeydown="handleReplyKey(event)"></textarea>
-            <div class="ttl-control">
-              <label>TTL</label>
-              <select id="reply-ttl-select">
-                <option value="">&infin;</option>
-                <option value="60">1m</option>
-                <option value="300">5m</option>
-                <option value="3600">1h</option>
-                <option value="86400">1d</option>
-                <option value="604800">7d</option>
-              </select>
-            </div>
+            <button class="ghost-btn" id="reply-ghost-btn" title="Ghost mode (reply auto-expires)">&#x1F47B;</button>
             <button class="send-btn" onclick="sendReply()">Reply</button>
           </div>
           <div class="pending-files" id="reply-pending-files"></div>
@@ -322,6 +294,7 @@
     </div>
     <div class="admin-tabs" id="user-settings-tabs">
       <button class="active" onclick="switchUserSettingsTab('profile',this)">Profile</button>
+      <button onclick="switchUserSettingsTab('chat',this)">Chat</button>
       <button onclick="switchUserSettingsTab('notifications',this)">Notifications</button>
       <button onclick="switchUserSettingsTab('files',this)">Files</button>
       <button onclick="switchUserSettingsTab('encryption',this)">Encryption</button>

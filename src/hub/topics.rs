@@ -56,12 +56,32 @@ impl Hub {
             return;
         }
 
+        // Ghost mode: enforce channel TTL settings
+        let effective_ttl = {
+            let force_ghost = self.db.is_channel_force_ghost(&channel);
+            let max_ttl = self.db.get_channel_max_ttl(&channel);
+            match (ttl_secs, force_ghost, max_ttl) {
+                (Some(user_ttl), _, Some(max)) => Some(user_ttl.min(max)),
+                (Some(user_ttl), _, None) => Some(user_ttl),
+                (None, true, Some(max)) => Some(max),
+                (None, true, None) => Some(86400),
+                (None, false, _) => None,
+            }
+        };
+
+        // Anonymous channel: replace author
+        let display_author = if self.db.is_channel_anonymous(&channel) {
+            "[Anonymous]".to_string()
+        } else {
+            username.clone()
+        };
+
         let topic_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let now_str = now.to_rfc3339();
-        let expires_at = ttl_secs.map(|s| (now + Duration::seconds(s as i64)).to_rfc3339());
+        let expires_at = effective_ttl.map(|s| (now + Duration::seconds(s as i64)).to_rfc3339());
         if let Err(e) = self.db.create_topic(
-            &topic_id, &channel, &title, &body, &username,
+            &topic_id, &channel, &title, &body, &display_author,
             expires_at.as_deref(), attachments.as_ref(), encrypted,
         ) {
             if let Some(client) = clients.get(&id) {
@@ -76,7 +96,7 @@ impl Hub {
             id: topic_id,
             channel: channel.clone(),
             title,
-            author: username,
+            author: display_author,
             created_at: now_str.clone(),
             pinned: false,
             reply_count: 0,
@@ -150,21 +170,46 @@ impl Hub {
         };
 
         // Check channel access via topic's channel
-        if let Some(topic) = self.db.get_topic(&topic_id) {
+        let topic_channel = if let Some(topic) = self.db.get_topic(&topic_id) {
             if !clients.get(&id).map_or(false, |c| c.channels.contains(&topic.channel)) {
                 if let Some(client) = clients.get(&id) {
                     let _ = Self::send_to(&client.tx, &ServerMsg::error("Not a member of this channel"));
                 }
                 return;
             }
-        }
+            topic.channel.clone()
+        } else {
+            String::new()
+        };
+
+        // Ghost mode: enforce channel TTL
+        let effective_ttl = if !topic_channel.is_empty() {
+            let force_ghost = self.db.is_channel_force_ghost(&topic_channel);
+            let max_ttl = self.db.get_channel_max_ttl(&topic_channel);
+            match (ttl_secs, force_ghost, max_ttl) {
+                (Some(user_ttl), _, Some(max)) => Some(user_ttl.min(max)),
+                (Some(user_ttl), _, None) => Some(user_ttl),
+                (None, true, Some(max)) => Some(max),
+                (None, true, None) => Some(86400),
+                (None, false, _) => None,
+            }
+        } else {
+            ttl_secs
+        };
+
+        // Anonymous channel: replace author
+        let display_author = if !topic_channel.is_empty() && self.db.is_channel_anonymous(&topic_channel) {
+            "[Anonymous]".to_string()
+        } else {
+            username.clone()
+        };
 
         let reply_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let now_str = now.to_rfc3339();
-        let expires_at = ttl_secs.map(|s| (now + Duration::seconds(s as i64)).to_rfc3339());
+        let expires_at = effective_ttl.map(|s| (now + Duration::seconds(s as i64)).to_rfc3339());
         if let Err(e) = self.db.create_topic_reply(
-            &reply_id, &topic_id, &username, &content,
+            &reply_id, &topic_id, &display_author, &content,
             expires_at.as_deref(), attachments.as_ref(), encrypted,
         ) {
             if let Some(client) = clients.get(&id) {
@@ -191,7 +236,7 @@ impl Hub {
         let reply = TopicReplyData {
             id: reply_id,
             topic_id: topic_id.clone(),
-            author: username,
+            author: display_author,
             content,
             created_at: now_str,
             expires_at,
@@ -264,7 +309,14 @@ impl Hub {
                 return;
             }
         };
-        let (author, _channel) = info;
+        let (author, ref topic_ch) = info;
+        // Anonymous channels: reject edits
+        if self.db.is_channel_anonymous(topic_ch) {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot edit topics in anonymous channels"));
+            }
+            return;
+        }
         if author != username {
             if let Some(client) = clients.get(&id) {
                 if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Can only edit your own topics")) {
@@ -317,8 +369,16 @@ impl Hub {
                 return;
             }
         };
-        let (author, _channel) = info;
-        if author == username {
+        let (author, ref topic_ch) = info;
+        // Anonymous channels: only admin with delete_any_message can delete
+        if self.db.is_channel_anonymous(topic_ch) {
+            if !self.db.user_has_permission(&username, "delete_any_message") {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot delete topics in anonymous channels (admin only)"));
+                }
+                return;
+            }
+        } else if author == username {
             if !self.db.user_has_permission(&username, "delete_own_topic") {
                 if let Some(client) = clients.get(&id) {
                     if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {
@@ -372,7 +432,16 @@ impl Hub {
                 return;
             }
         };
-        let (author, _topic_id) = info;
+        let (author, ref reply_topic_id) = info;
+        // Anonymous channels: reject edits on replies
+        if let Some(topic) = self.db.get_topic(reply_topic_id) {
+            if self.db.is_channel_anonymous(&topic.channel) {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot edit replies in anonymous channels"));
+                }
+                return;
+            }
+        }
         if author != username {
             if let Some(client) = clients.get(&id) {
                 if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Can only edit your own replies")) {
@@ -428,8 +497,19 @@ impl Hub {
                 return;
             }
         };
-        let (author, _topic_id) = info;
-        if author == username {
+        let (author, ref del_reply_topic_id) = info;
+        // Anonymous channels: only admin with delete_any_message can delete
+        let is_anon_channel = self.db.get_topic(del_reply_topic_id)
+            .map(|t| self.db.is_channel_anonymous(&t.channel))
+            .unwrap_or(false);
+        if is_anon_channel {
+            if !self.db.user_has_permission(&username, "delete_any_message") {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot delete replies in anonymous channels (admin only)"));
+                }
+                return;
+            }
+        } else if author == username {
             if !self.db.user_has_permission(&username, "delete_own_message") {
                 if let Some(client) = clients.get(&id) {
                     if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {

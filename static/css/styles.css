@@ -602,6 +602,34 @@
   .channel-item.has-unread span:first-child, .dm-item.has-unread .dm-name { font-weight: 700; color: var(--text); }
   .channel-item.no-e2e-key, .dm-item.no-e2e-key { opacity: 0.45; }
   .channel-item.no-e2e-key span:first-child, .dm-item.no-e2e-key .dm-name { color: var(--red); }
+  .channel-item.no-channel-key, .dm-item.no-channel-key { opacity: 0.65; }
+  .channel-item.no-channel-key span:first-child, .dm-item.no-channel-key .dm-name { color: var(--orange); }
+
+  /* ── Anonymous banner ── */
+  .anon-banner {
+    padding: 0.25rem 1rem; font-size: 0.75rem; color: var(--orange);
+    background: rgba(210, 153, 34, 0.08); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  /* ── Ghost button ── */
+  .ghost-btn {
+    background: transparent; border: 1px solid var(--border); border-radius: 4px;
+    font-size: 1.1rem; cursor: pointer; padding: 0.2rem 0.4rem; line-height: 1;
+    opacity: 0.5; transition: opacity 0.15s, background 0.15s;
+  }
+  .ghost-btn:hover { opacity: 0.8; }
+  .ghost-btn.active { opacity: 1; background: rgba(210, 153, 34, 0.15); border-color: var(--orange); }
+  .ghost-btn.forced { opacity: 1; background: rgba(210, 153, 34, 0.1); cursor: not-allowed; border-color: var(--orange); }
+  .ghost-popover {
+    position: absolute; bottom: 100%; right: 0; background: var(--bg2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem;
+    z-index: 200; min-width: 140px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .ghost-popover label { display: block; padding: 0.25rem 0.3rem; font-size: 0.8rem;
+                          cursor: pointer; border-radius: 3px; color: var(--text); }
+  .ghost-popover label:hover { background: var(--bg3); }
+  .ghost-popover label input { margin-right: 0.4rem; }
 
   /* ── File manager ─── */
   .quota-info { margin-bottom: 0.8rem; }
@@ -1074,8 +1102,8 @@
     .input-row { gap: 0.3rem; }
     .input-area textarea { font-size: 0.85rem; min-height: 36px; padding: 0.4rem 0.5rem; }
 
-    /* Hide TTL on mobile to save space */
-    .ttl-control { display: none; }
+    /* Ghost button visible on mobile (replaces old hidden TTL control) */
+    .ghost-btn { font-size: 0.95rem; padding: 0.15rem 0.3rem; }
 
     /* Send button: compact */
     .send-btn { padding: 0.4rem 0.7rem; font-size: 0.8rem; }

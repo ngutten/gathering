@@ -110,6 +110,78 @@ impl Hub {
         self.broadcast_channel_lists(&clients);
     }
 
+    pub(super) async fn handle_set_channel_anonymous(&self, id: usize, channel: String, anonymous: bool) {
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+
+        let is_creator = self.db.get_channel_creator(&channel).as_deref() == Some(&username);
+        let is_admin = self.db.user_has_permission(&username, "manage_settings");
+        if !is_creator && !is_admin {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can change anonymous mode"));
+            }
+            return;
+        }
+
+        self.db.set_channel_anonymous(&channel, anonymous);
+        Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelAnonymousUpdated {
+            channel: channel.clone(),
+            anonymous,
+        }, None);
+        self.broadcast_channel_lists(&clients);
+    }
+
+    pub(super) async fn handle_set_channel_ghost(&self, id: usize, channel: String, force_ghost: bool) {
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+
+        let is_creator = self.db.get_channel_creator(&channel).as_deref() == Some(&username);
+        let is_admin = self.db.user_has_permission(&username, "manage_settings");
+        if !is_creator && !is_admin {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can change ghost mode"));
+            }
+            return;
+        }
+
+        self.db.set_channel_force_ghost(&channel, force_ghost);
+        Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelGhostUpdated {
+            channel: channel.clone(),
+            force_ghost,
+        }, None);
+        self.broadcast_channel_lists(&clients);
+    }
+
+    pub(super) async fn handle_set_channel_max_ttl(&self, id: usize, channel: String, max_ttl_secs: Option<u64>) {
+        let clients = self.clients.lock().await;
+        let username = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => c.username.clone(),
+            _ => return,
+        };
+
+        let is_creator = self.db.get_channel_creator(&channel).as_deref() == Some(&username);
+        let is_admin = self.db.user_has_permission(&username, "manage_settings");
+        if !is_creator && !is_admin {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Only the channel creator or an admin can change max TTL"));
+            }
+            return;
+        }
+
+        self.db.set_channel_max_ttl(&channel, max_ttl_secs);
+        Self::broadcast_to_channel_inner(&clients, &channel, &ServerMsg::ChannelMaxTtlUpdated {
+            channel: channel.clone(),
+            max_ttl_secs,
+        }, None);
+        self.broadcast_channel_lists(&clients);
+    }
+
     pub(super) async fn handle_get_channel_members(&self, id: usize, channel: String) {
         let clients = self.clients.lock().await;
         let username = match clients.get(&id) {

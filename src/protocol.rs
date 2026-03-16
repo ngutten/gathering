@@ -16,7 +16,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const SERVER_CAPABILITIES: &[&str] = &[
     "chat", "voice", "topics", "reactions", "pins", "search",
     "e2e", "files", "roles", "dms", "profiles", "widgets",
-    "channel_access",
+    "channel_access", "ghost",
 ];
 
 /// Build the capabilities list, conditionally including optional features.
@@ -175,6 +175,13 @@ pub enum ClientMsg {
     RemoveChannelMember { channel: String, username: String },
     GetChannelMembers { channel: String },
 
+    // ── Anonymous Channels ──
+    SetChannelAnonymous { channel: String, anonymous: bool },
+
+    // ── Ghost Mode ──
+    SetChannelGhost { channel: String, force_ghost: bool },
+    SetChannelMaxTtl { channel: String, max_ttl_secs: Option<u64> },
+
     // ── E2E Encryption ──
     UploadPublicKey { public_key: String },
     GetPublicKeys { usernames: Vec<String> },
@@ -321,6 +328,13 @@ pub enum ServerMsg {
     ChannelMemberAdded { channel: String, username: String },
     ChannelMemberRemoved { channel: String, username: String },
 
+    // ── Anonymous Channels ──
+    ChannelAnonymousUpdated { channel: String, anonymous: bool },
+
+    // ── Ghost Mode ──
+    ChannelGhostUpdated { channel: String, force_ghost: bool },
+    ChannelMaxTtlUpdated { channel: String, max_ttl_secs: Option<u64> },
+
     // ── File Management ──
     MyFileList { files: Vec<UserFileInfo>, used_bytes: i64, quota_bytes: i64 },
     FilePinned { file_id: String, pinned: bool },
@@ -415,6 +429,14 @@ pub struct ChannelInfo {
     pub restricted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_key: Option<bool>,
+    #[serde(default)]
+    pub anonymous: bool,
+    #[serde(default)]
+    pub force_ghost: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_ttl_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

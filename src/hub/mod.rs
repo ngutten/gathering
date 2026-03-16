@@ -427,6 +427,18 @@ impl Hub {
                 self.handle_get_channel_members(id, channel).await;
             }
 
+            ClientMsg::SetChannelAnonymous { channel, anonymous } => {
+                self.handle_set_channel_anonymous(id, channel, anonymous).await;
+            }
+
+            ClientMsg::SetChannelGhost { channel, force_ghost } => {
+                self.handle_set_channel_ghost(id, channel, force_ghost).await;
+            }
+
+            ClientMsg::SetChannelMaxTtl { channel, max_ttl_secs } => {
+                self.handle_set_channel_max_ttl(id, channel, max_ttl_secs).await;
+            }
+
             ClientMsg::UploadPublicKey { public_key } => {
                 self.handle_upload_public_key(id, public_key).await;
             }
@@ -540,6 +552,9 @@ impl Hub {
                     }
                     "allow_dms" => {
                         ["everyone", "none"].contains(&value.as_str())
+                    }
+                    "ghost_ttl" => {
+                        value.parse::<u64>().is_ok()
                     }
                     _ => {
                         self.send_error(id, "Invalid preference key").await;
@@ -679,7 +694,15 @@ impl Hub {
                 let encrypted = self.db.is_channel_encrypted(&name);
                 let restricted = self.db.is_channel_restricted(&name);
                 let created_by = self.db.get_channel_creator(&name);
-                ChannelInfo { name, user_count, encrypted, channel_type, restricted, created_by }
+                let has_key = if encrypted {
+                    username.map(|u| self.db.user_has_channel_key(&name, u))
+                } else {
+                    None
+                };
+                let anonymous = self.db.is_channel_anonymous(&name);
+                let force_ghost = self.db.is_channel_force_ghost(&name);
+                let max_ttl_secs = self.db.get_channel_max_ttl(&name);
+                ChannelInfo { name, user_count, encrypted, channel_type, restricted, created_by, has_key, anonymous, force_ghost, max_ttl_secs }
             })
             .collect()
     }

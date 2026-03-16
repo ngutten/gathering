@@ -118,6 +118,15 @@ impl Db {
         }
     }
 
+    pub fn user_has_channel_key(&self, channel: &str, username: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM channel_keys WHERE channel = ?1 AND username = ?2",
+            params![channel, username],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false)
+    }
+
     pub fn get_channel_key_version(&self, channel: &str) -> i32 {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(

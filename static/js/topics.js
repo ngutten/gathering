@@ -4,6 +4,7 @@ import state from './state.js';
 import { send, apiFetch } from './transport.js';
 import { tryEncrypt, tryDecrypt } from './crypto.js';
 import { escapeHtml, renderRichContent, formatFileSize, formatTimeAgo, renderTtlBadge, renderEncryptedBadge, renderAttachmentsHtml, decryptAndRenderAttachments, isImageMime, isAudioMime, isVideoMime } from './render.js';
+import { getEffectiveGhostTtl } from './chat-ui.js';
 
 export function switchView(view) {
   const prevView = state.currentView;
@@ -65,11 +66,11 @@ export function createTopic() {
   let title = titleEl.value.trim();
   let body = bodyEl.value.trim();
   if (!title) return;
-  const ttlVal = document.getElementById('topic-ttl-select').value;
+  const ttl = getEffectiveGhostTtl();
   const encTitle = tryEncrypt(title, state.currentChannel);
   const encBody = body ? tryEncrypt(body, state.currentChannel) : { content: '', encrypted: false };
   const msg = { channel: state.currentChannel, title: encTitle.content, body: encBody.content, encrypted: encTitle.encrypted };
-  if (ttlVal) msg.ttl_secs = parseInt(ttlVal);
+  if (ttl) msg.ttl_secs = ttl;
   if (state.topicPendingAttachments.length > 0) msg.attachments = state.topicPendingAttachments.map(f => f.id);
   send('CreateTopic', msg);
   titleEl.value = '';
@@ -83,10 +84,10 @@ export function sendReply() {
   let content = input.value.trim();
   if (!content && state.replyPendingAttachments.length === 0) return;
   if (!state.currentTopicId) return;
-  const ttlVal = document.getElementById('reply-ttl-select').value;
+  const ttl = getEffectiveGhostTtl();
   const enc = tryEncrypt(content || '', state.currentChannel);
   const msg = { topic_id: state.currentTopicId, content: enc.content, encrypted: enc.encrypted };
-  if (ttlVal) msg.ttl_secs = parseInt(ttlVal);
+  if (ttl) msg.ttl_secs = ttl;
   if (state.replyPendingAttachments.length > 0) msg.attachments = state.replyPendingAttachments.map(f => f.id);
   send('TopicReply', msg);
   input.value = '';
@@ -119,9 +120,10 @@ export function renderThread(topic, replies) {
   state.currentTopicPinned = topic.pinned;
   state.currentTopicAuthor = topic.author;
   document.getElementById('thread-pin-btn').textContent = topic.pinned ? 'Unpin' : 'Pin';
-  const canEditTopic = (topic.author === state.currentUser) || state.isAdmin;
-  document.getElementById('thread-edit-btn').style.display = (topic.author === state.currentUser) ? '' : 'none';
-  document.getElementById('thread-delete-btn').style.display = canEditTopic ? '' : 'none';
+  const isAnon = state.channelAnonymous[topic.channel || state.currentChannel];
+  const canEditTopic = !isAnon && ((topic.author === state.currentUser) || state.isAdmin);
+  document.getElementById('thread-edit-btn').style.display = (!isAnon && topic.author === state.currentUser) ? '' : 'none';
+  document.getElementById('thread-delete-btn').style.display = (isAnon ? state.isAdmin : canEditTopic) ? '' : 'none';
 
   const time = new Date(topic.created_at).toLocaleString();
   let ttlHtml = renderTtlBadge(topic.expires_at);
@@ -168,9 +170,14 @@ export function appendTopicReply(reply) {
 
   let actionsHtml = '';
   const isOwn = reply.author === state.currentUser;
-  if (isOwn || state.isAdmin) {
+  const isAnon = state.channelAnonymous[state.currentChannel];
+  if ((isOwn || state.isAdmin) && !isAnon) {
     actionsHtml = '<div class="msg-actions">';
     if (isOwn) actionsHtml += `<button onclick="startEditReply('${reply.id}')">edit</button>`;
+    actionsHtml += `<button class="del-btn" onclick="deleteReply('${reply.id}')">del</button>`;
+    actionsHtml += '</div>';
+  } else if (isAnon && state.isAdmin) {
+    actionsHtml = '<div class="msg-actions">';
     actionsHtml += `<button class="del-btn" onclick="deleteReply('${reply.id}')">del</button>`;
     actionsHtml += '</div>';
   }

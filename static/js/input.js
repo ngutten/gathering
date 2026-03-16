@@ -4,7 +4,7 @@ import state, { isDMChannel } from './state.js';
 import { send, apiFetch } from './transport.js';
 import { encryptFile, encryptChannelKeyForUser, generateChannelKey, tryEncrypt } from './crypto.js';
 import { escapeHtml, formatFileSize } from './render.js';
-import { appendSystem, cancelReply } from './chat-ui.js';
+import { appendSystem, cancelReply, getEffectiveGhostTtl } from './chat-ui.js';
 
 const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_INPUT_HEIGHT_PX = 120;
@@ -24,8 +24,7 @@ export function sendMessage() {
 
   if (!content && state.pendingAttachments.length === 0) return;
 
-  const ttlSelect = document.getElementById('ttl-select');
-  const ttl = ttlSelect.value ? parseInt(ttlSelect.value) : null;
+  const ttl = getEffectiveGhostTtl();
 
   const enc = tryEncrypt(content || '', state.currentChannel);
 

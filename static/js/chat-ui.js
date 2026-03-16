@@ -18,12 +18,13 @@ function buildMsgActionsHtml(msg) {
   const isOwn = msg.author === state.currentUser;
   const canPin = state.isAdmin || (state.channelCreators && state.channelCreators[msg.channel || state.currentChannel] === state.currentUser);
   const isEncrypted = state.encryptedChannels.has(msg.channel || state.currentChannel);
+  const isAnon = state.channelAnonymous[msg.channel || state.currentChannel];
   let html = '<div class="msg-actions" role="toolbar" aria-label="Message actions">';
   if (!isEncrypted) html += `<button class="react-btn" data-msg-id="${msg.id}" aria-label="Add reaction">+&#x1F600;</button>`;
   html += `<button onclick="startReply('${msg.id}')" aria-label="Reply">reply</button>`;
   if (canPin) html += `<button onclick="togglePinMessage('${msg.id}')" aria-label="${msg.pinned ? 'Unpin' : 'Pin'} message">${msg.pinned ? 'unpin' : 'pin'}</button>`;
-  if (isOwn) html += `<button onclick="startEditMessage('${msg.id}')" aria-label="Edit message">edit</button>`;
-  if (isOwn || state.isAdmin) html += `<button class="del-btn" onclick="deleteMessage('${msg.id}')" aria-label="Delete message">del</button>`;
+  if (isOwn && !isAnon) html += `<button onclick="startEditMessage('${msg.id}')" aria-label="Edit message">edit</button>`;
+  if (isAnon ? state.isAdmin : (isOwn || state.isAdmin)) html += `<button class="del-btn" onclick="deleteMessage('${msg.id}')" aria-label="Delete message">del</button>`;
   html += '</div>';
   return html;
 }
@@ -366,7 +367,14 @@ function updateSidebarActiveClasses() {
 }
 
 export function renderChannels() {
-  state.channels.forEach(ch => { if (ch.encrypted) state.encryptedChannels.add(ch.name); });
+  state.channels.forEach(ch => {
+    if (ch.encrypted) state.encryptedChannels.add(ch.name);
+    if (ch.created_by) state.channelCreators[ch.name] = ch.created_by;
+    // Populate ghost/anon state from ChannelInfo
+    state.channelForceGhost[ch.name] = !!ch.force_ghost;
+    state.channelMaxTtl[ch.name] = ch.max_ttl_secs ?? null;
+    state.channelAnonymous[ch.name] = !!ch.anonymous;
+  });
 
   // Separate text and voice channels
   const textChannels = state.channels.filter(ch => !isDMChannel(ch.name) && ch.channel_type !== 'voice');
@@ -380,18 +388,24 @@ export function renderChannels() {
   if (document.activeElement && el.contains(document.activeElement)) {
     updateSidebarActiveClasses();
     renderVoiceChannelList();
+    updateGhostButton();
     return;
   }
 
   el.innerHTML = textChannels.map(ch => {
-    const lock = ch.encrypted ? '&#x1F512; ' : ch.restricted ? '&#x1F6E1; ' : '#';
+    const lock = ch.encrypted ? '&#x1F512; ' : ch.anonymous ? '&#x1F3AD; ' : ch.restricted ? '&#x1F6E1; ' : '#';
     const unread = state.unreadCounts[ch.name] || 0;
     const hasMention = state.unreadMentions[ch.name];
     const badgeClass = hasMention ? 'unread-badge unread-mention' : 'unread-badge';
     const unreadBadge = unread > 0 ? `<span class="${badgeClass}">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
-    const noKeyClass = ch.encrypted && !state.e2eReady ? ' no-e2e-key' : '';
-    return `<div class="channel-item${boldClass}${noKeyClass} ${ch.name === state.currentChannel ? 'active' : ''}"
+    let keyClass = '';
+    if (ch.encrypted && !state.e2eReady) {
+      keyClass = ' no-e2e-key';
+    } else if (ch.encrypted && state.e2eReady && ch.has_key === false) {
+      keyClass = ' no-channel-key';
+    }
+    return `<div class="channel-item${boldClass}${keyClass} ${ch.name === state.currentChannel ? 'active' : ''}"
          onclick="switchChannel('${escapeHtml(ch.name)}')" tabindex="0" role="button" data-channel="${escapeHtml(ch.name)}"
          aria-label="${escapeHtml(ch.name)} channel${unread > 0 ? ', ' + unread + ' unread' : ''}"
          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if('${escapeHtml(ch.name)}'===window._gatheringState.currentChannel){var r=this.getBoundingClientRect();this.dispatchEvent(new MouseEvent('contextmenu',{clientX:r.left+20,clientY:r.bottom,bubbles:true}));}else{switchChannel('${escapeHtml(ch.name)}');}}">
@@ -399,6 +413,7 @@ export function renderChannels() {
       <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
     </div>`;
   }).join('');
+  updateGhostButton();
 
   // Render voice channels
   renderVoiceChannelList();
@@ -503,8 +518,13 @@ export function renderDMList() {
     const badgeClass = hasMention ? 'unread-badge unread-mention' : 'unread-badge';
     const unreadBadge = unread > 0 ? `<span class="${badgeClass}">${unread > 99 ? '99+' : unread}</span>` : '';
     const boldClass = unread > 0 ? ' has-unread' : '';
-    const noKeyClass = !state.e2eReady ? ' no-e2e-key' : '';
-    return `<div class="dm-item${boldClass}${noKeyClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')" tabindex="0" role="button" data-channel="${escapeHtml(ch)}"
+    let dmKeyClass = '';
+    if (!state.e2eReady) {
+      dmKeyClass = ' no-e2e-key';
+    } else if (!state.channelKeys[ch]) {
+      dmKeyClass = ' no-channel-key';
+    }
+    return `<div class="dm-item${boldClass}${dmKeyClass} ${ch === state.currentChannel ? 'active' : ''}" onclick="switchChannel('${escapeHtml(ch)}')" tabindex="0" role="button" data-channel="${escapeHtml(ch)}"
          aria-label="Direct message with ${escapeHtml(other)}${unread > 0 ? ', ' + unread + ' unread' : ''}"
          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();switchChannel('${escapeHtml(ch)}');}">
       <span class="dm-name">&#x1F512; ${escapeHtml(other)}</span>
@@ -667,6 +687,40 @@ export function renderChannelMemberPanel(msg) {
     }
   }
 
+  // Anonymous channel toggle
+  if (canManage) {
+    const isAnon = state.channelAnonymous[msg.channel];
+    html += `<div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);">
+      <label style="font-size:0.75rem;cursor:pointer;">
+        <input type="checkbox" ${isAnon ? 'checked' : ''} onchange="toggleChannelAnonymous('${escapeHtml(msg.channel)}', this.checked)">
+        Anonymous mode (hide authors)
+      </label>
+    </div>`;
+  }
+
+  // Ghost mode (force) + max TTL
+  if (canManage) {
+    const isForceGhost = state.channelForceGhost[msg.channel];
+    const maxTtl = state.channelMaxTtl[msg.channel];
+    html += `<div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);">
+      <label style="font-size:0.75rem;cursor:pointer;">
+        <input type="checkbox" ${isForceGhost ? 'checked' : ''} onchange="toggleChannelGhost('${escapeHtml(msg.channel)}', this.checked)">
+        Force ghost mode (messages auto-expire)
+      </label>
+      <div style="margin-top:0.3rem;">
+        <label style="font-size:0.7rem;color:var(--text2);">Max TTL:
+          <select style="font-size:0.75rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:3px;padding:0.15rem;" onchange="setChannelMaxTtl('${escapeHtml(msg.channel)}', this.value)">
+            <option value="">No limit</option>
+            <option value="300" ${maxTtl === 300 ? 'selected' : ''}>5 minutes</option>
+            <option value="3600" ${maxTtl === 3600 ? 'selected' : ''}>1 hour</option>
+            <option value="86400" ${maxTtl === 86400 ? 'selected' : ''}>1 day</option>
+            <option value="604800" ${maxTtl === 604800 ? 'selected' : ''}>7 days</option>
+          </select>
+        </label>
+      </div>
+    </div>`;
+  }
+
   // Re-key button for encrypted channels
   if (state.encryptedChannels.has(msg.channel) && state.channelKeys[msg.channel]) {
     html += `<div style="margin-top:0.7rem;padding-top:0.5rem;border-top:1px solid var(--border);">
@@ -691,6 +745,22 @@ export function closeChannelSettings() {
 export function toggleChannelRestricted(channel, restricted) {
   send('SetChannelRestricted', { channel, restricted });
   // Refresh the member list after a short delay
+  setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
+}
+
+export function toggleChannelAnonymous(channel, anonymous) {
+  send('SetChannelAnonymous', { channel, anonymous });
+  setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
+}
+
+export function toggleChannelGhost(channel, forceGhost) {
+  send('SetChannelGhost', { channel, force_ghost: forceGhost });
+  setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
+}
+
+export function setChannelMaxTtl(channel, value) {
+  const maxTtl = value ? parseInt(value) : null;
+  send('SetChannelMaxTtl', { channel, max_ttl_secs: maxTtl });
   setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
 }
 
@@ -825,6 +895,11 @@ export function switchChannel(name) {
   renderChannels();
   renderDMList();
   updateRequestKeyButton();
+  // Show/hide anonymous banner
+  const anonBanner = document.getElementById('anon-banner');
+  if (anonBanner) anonBanner.style.display = state.channelAnonymous[name] ? '' : 'none';
+  // Update ghost button state
+  updateGhostButton();
   // Hide widgets on encrypted channels (data leak risk)
   const widgetBtn = document.getElementById('widget-toolbar-btn');
   if (widgetBtn) widgetBtn.style.display = state.encryptedChannels.has(name) ? 'none' : '';
@@ -855,6 +930,118 @@ export function updateRequestKeyButton() {
   const ch = state.currentChannel;
   const needsKey = state.encryptedChannels.has(ch) && !state.channelKeys[ch] && state.e2eReady;
   btn.style.display = needsKey ? '' : 'none';
+}
+
+// ── Ghost mode ──
+
+const TTL_OPTIONS = [
+  { value: 60, label: '1 minute' },
+  { value: 300, label: '5 minutes' },
+  { value: 3600, label: '1 hour' },
+  { value: 86400, label: '1 day' },
+  { value: 604800, label: '7 days' },
+];
+
+function formatTtlShort(secs) {
+  if (secs >= 604800) return `${Math.round(secs / 604800)}d`;
+  if (secs >= 86400) return `${Math.round(secs / 86400)}d`;
+  if (secs >= 3600) return `${Math.round(secs / 3600)}h`;
+  if (secs >= 60) return `${Math.round(secs / 60)}m`;
+  return `${secs}s`;
+}
+
+export function updateGhostButton() {
+  ['ghost-btn', 'topic-ghost-btn', 'reply-ghost-btn'].forEach(btnId => {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    const ch = state.currentChannel;
+    const forced = state.channelForceGhost[ch];
+    const active = state.ghostMode || forced;
+    btn.classList.toggle('active', active && !forced);
+    btn.classList.toggle('forced', !!forced);
+    const effectiveTtl = state.channelMaxTtl[ch] != null
+      ? Math.min(state.ghostTtl, state.channelMaxTtl[ch])
+      : state.ghostTtl;
+    if (forced) {
+      btn.title = `Ghost mode forced (${formatTtlShort(state.channelMaxTtl[ch] || 86400)})`;
+    } else if (state.ghostMode) {
+      btn.title = `Ghost mode ON (${formatTtlShort(effectiveTtl)}) — click to toggle, right-click for options`;
+    } else {
+      btn.title = 'Ghost mode OFF — click to toggle, right-click for options';
+    }
+  });
+}
+
+export function getEffectiveGhostTtl() {
+  const ch = state.currentChannel;
+  const forced = state.channelForceGhost[ch];
+  const active = state.ghostMode || forced;
+  if (!active) return null;
+  const ttl = state.ghostTtl;
+  const maxTtl = state.channelMaxTtl[ch];
+  if (maxTtl != null) return Math.min(ttl, maxTtl);
+  return ttl;
+}
+
+export function initGhostButtons() {
+  ['ghost-btn', 'topic-ghost-btn', 'reply-ghost-btn'].forEach(btnId => {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      if (state.channelForceGhost[state.currentChannel]) return; // can't toggle forced
+      state.ghostMode = !state.ghostMode;
+      try { scopedSet('ghost_mode', state.ghostMode ? '1' : '0'); } catch(e) {}
+      updateGhostButton();
+    });
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showGhostPopover(btn);
+    });
+  });
+  // Load persisted ghost state
+  try {
+    const saved = localStorage.getItem('gathering_ghost_mode');
+    if (saved === '1') state.ghostMode = true;
+    const savedTtl = localStorage.getItem('gathering_ghost_ttl');
+    if (savedTtl) state.ghostTtl = parseInt(savedTtl) || 86400;
+  } catch(e) {}
+  updateGhostButton();
+}
+
+function showGhostPopover(anchorBtn) {
+  // Close existing
+  const existing = document.querySelector('.ghost-popover');
+  if (existing) { existing.remove(); return; }
+
+  const pop = document.createElement('div');
+  pop.className = 'ghost-popover';
+  pop.innerHTML = TTL_OPTIONS.map(opt =>
+    `<label><input type="radio" name="ghost-ttl" value="${opt.value}" ${state.ghostTtl === opt.value ? 'checked' : ''}> ${opt.label}</label>`
+  ).join('');
+  pop.querySelectorAll('input').forEach(input => {
+    input.addEventListener('change', () => {
+      state.ghostTtl = parseInt(input.value);
+      try { localStorage.setItem('gathering_ghost_ttl', String(state.ghostTtl)); } catch(e) {}
+      send('SetPreference', { key: 'ghost_ttl', value: String(state.ghostTtl) });
+      if (!state.ghostMode && !state.channelForceGhost[state.currentChannel]) {
+        state.ghostMode = true;
+        try { localStorage.setItem('gathering_ghost_mode', '1'); } catch(e) {}
+      }
+      updateGhostButton();
+      pop.remove();
+    });
+  });
+  // Position relative to button
+  anchorBtn.style.position = 'relative';
+  anchorBtn.appendChild(pop);
+  // Close on click outside
+  const closeHandler = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchorBtn) {
+      pop.remove();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }
 
 // Client-side rate limit: track last request time per channel
@@ -1298,10 +1485,32 @@ function renderUserSettingsTab(tab) {
   if (!el) return;
   switch (tab) {
     case 'profile': renderProfileTab(el); break;
+    case 'chat': renderChatTab(el); break;
     case 'notifications': renderNotificationsTab(el); break;
     case 'files': renderFilesTab(el); break;
     case 'encryption': renderEncryptionTab(el); break;
   }
+}
+
+function renderChatTab(el) {
+  const ttlOpts = TTL_OPTIONS.map(opt =>
+    `<label style="display:block;padding:0.2rem 0;cursor:pointer;"><input type="radio" name="settings-ghost-ttl" value="${opt.value}" ${state.ghostTtl === opt.value ? 'checked' : ''} onchange="setGhostTtlFromSettings(${opt.value})"> ${opt.label}</label>`
+  ).join('');
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-label" style="margin-bottom:0.5rem;">Ghost Mode</div>
+      <div style="font-size:0.8rem;color:var(--text2);margin-bottom:0.5rem;">
+        When active, your messages will automatically expire after the selected duration.
+        Channel admins can also force ghost mode on specific channels.
+      </div>
+      <label style="display:block;margin-bottom:0.6rem;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="settings-ghost-toggle" ${state.ghostMode ? 'checked' : ''} onchange="toggleGhostFromSettings(this.checked)">
+        Enable ghost mode by default
+      </label>
+      <div class="profile-label" style="margin-bottom:0.3rem;">Default expiry duration</div>
+      ${ttlOpts}
+    </div>
+  `;
 }
 
 function renderProfileTab(el) {

@@ -54,7 +54,31 @@ impl Hub {
             return;
         }
 
-        let expires_at = ttl_secs.map(|s| Utc::now() + Duration::seconds(s as i64));
+        // Ghost mode: enforce channel TTL settings
+        let effective_ttl = {
+            let force_ghost = self.db.is_channel_force_ghost(&channel);
+            let max_ttl = self.db.get_channel_max_ttl(&channel);
+            match (ttl_secs, force_ghost, max_ttl) {
+                // User sent TTL, channel has max → clamp
+                (Some(user_ttl), _, Some(max)) => Some(user_ttl.min(max)),
+                // User sent TTL, no max → use as-is
+                (Some(user_ttl), _, None) => Some(user_ttl),
+                // No TTL but channel forces ghost with max → apply max
+                (None, true, Some(max)) => Some(max),
+                // No TTL but channel forces ghost, no max → default 24h
+                (None, true, None) => Some(86400),
+                // No TTL, no force → permanent
+                (None, false, _) => None,
+            }
+        };
+        let expires_at = effective_ttl.map(|s| Utc::now() + Duration::seconds(s as i64));
+
+        // Anonymous channel: replace author with [Anonymous]
+        let display_author = if self.db.is_channel_anonymous(&channel) {
+            "[Anonymous]".to_string()
+        } else {
+            username.clone()
+        };
 
         // Parse @mentions from content
         let mentions = Self::parse_mentions(&content, &username, &channel, &clients, &self.db);
@@ -85,15 +109,15 @@ impl Hub {
 
         let mentions_opt = if mentions.is_empty() { None } else { Some(mentions.clone()) };
 
-        let msg = ServerMsg::message(&channel, &username, &content, expires_at, file_infos, encrypted, reply_to.clone(), mentions_opt.clone());
+        let msg = ServerMsg::message(&channel, &display_author, &content, expires_at, file_infos, encrypted, reply_to.clone(), mentions_opt.clone());
 
-        // Store in database
+        // Store in database (use display_author so anonymous is preserved in DB)
         if let ServerMsg::Message {
             ref id, ref timestamp, ref expires_at, ..
         } = msg
         {
             self.db.store_message(
-                id, &channel, &username, &content,
+                id, &channel, &display_author, &content,
                 timestamp, expires_at.as_ref(),
                 attachments.as_ref(),
                 encrypted,

@@ -99,6 +99,13 @@ const INITIAL_STATE = {
   // Online users list
   onlineUsers: [],
 
+  // Ghost mode
+  ghostMode: false,
+  ghostTtl: 86400,
+  channelForceGhost: {},
+  channelMaxTtl: {},
+  channelAnonymous: {},
+
   // Protocol negotiation
   serverProtocolVersion: null,
   serverCapabilities: [],

@@ -23,8 +23,15 @@ impl Hub {
                 return;
             }
         };
-        let (_channel, author) = info;
-        if author != username {
+        let (ref msg_channel, ref author) = info;
+        // Anonymous channels: always reject edits
+        if self.db.is_channel_anonymous(msg_channel) {
+            if let Some(client) = clients.get(&id) {
+                let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot edit messages in anonymous channels"));
+            }
+            return;
+        }
+        if *author != username {
             if let Some(client) = clients.get(&id) {
                 if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Can only edit your own messages")) {
                     eprintln!("[hub::messages] send edit ownership error failed: {e:?}");
@@ -76,8 +83,16 @@ impl Hub {
                 return;
             }
         };
-        let (_channel, author) = info;
-        if author == username {
+        let (ref msg_channel, ref author) = info;
+        // Anonymous channels: only admin with delete_any_message can delete
+        if self.db.is_channel_anonymous(msg_channel) {
+            if !self.db.user_has_permission(&username, "delete_any_message") {
+                if let Some(client) = clients.get(&id) {
+                    let _ = Self::send_to(&client.tx, &ServerMsg::error("Cannot delete messages in anonymous channels (admin only)"));
+                }
+                return;
+            }
+        } else if *author == username {
             if !self.db.user_has_permission(&username, "delete_own_message") {
                 if let Some(client) = clients.get(&id) {
                     if let Err(e) = Self::send_to(&client.tx, &ServerMsg::error("Permission denied")) {

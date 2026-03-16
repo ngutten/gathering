@@ -177,6 +177,71 @@ impl Db {
         result
     }
 
+    pub fn set_channel_anonymous(&self, channel: &str, anonymous: bool) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = conn.execute(
+            "UPDATE channels SET anonymous = ?2 WHERE name = ?1",
+            params![channel, anonymous as i32],
+        ) {
+            eprintln!("[db::channels] set_channel_anonymous update failed: {e}");
+        }
+    }
+
+    pub fn is_channel_anonymous(&self, channel: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT anonymous FROM channels WHERE name = ?1",
+            params![channel],
+            |row| row.get::<_, i32>(0),
+        ).map(|v| v != 0).unwrap_or(false)
+    }
+
+    pub fn set_channel_force_ghost(&self, channel: &str, force_ghost: bool) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = conn.execute(
+            "UPDATE channels SET force_ghost = ?2 WHERE name = ?1",
+            params![channel, force_ghost as i32],
+        ) {
+            eprintln!("[db::channels] set_channel_force_ghost update failed: {e}");
+        }
+    }
+
+    pub fn is_channel_force_ghost(&self, channel: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT force_ghost FROM channels WHERE name = ?1",
+            params![channel],
+            |row| row.get::<_, i32>(0),
+        ).map(|v| v != 0).unwrap_or(false)
+    }
+
+    pub fn set_channel_max_ttl(&self, channel: &str, max_ttl_secs: Option<u64>) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = conn.execute(
+            "UPDATE channels SET max_ttl_secs = ?2 WHERE name = ?1",
+            params![channel, max_ttl_secs.map(|v| v as i64)],
+        ) {
+            eprintln!("[db::channels] set_channel_max_ttl update failed: {e}");
+        }
+    }
+
+    pub fn get_channel_max_ttl(&self, channel: &str) -> Option<u64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT max_ttl_secs FROM channels WHERE name = ?1",
+            params![channel],
+            |row| row.get::<_, Option<i64>>(0),
+        ).ok().flatten().map(|v| v as u64)
+    }
+
+    pub fn get_channel_anonymous(&self, channel: &str) -> bool {
+        self.is_channel_anonymous(channel)
+    }
+
+    pub fn get_channel_force_ghost(&self, channel: &str) -> bool {
+        self.is_channel_force_ghost(channel)
+    }
+
     pub fn clear_channel_messages(&self, channel: &str) -> Result<usize, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 

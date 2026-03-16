@@ -196,6 +196,9 @@ impl Db {
         ensure_column(&conn, "messages", "reply_to_snippet", "TEXT");
         ensure_column(&conn, "messages", "mentions", "TEXT");
         ensure_column(&conn, "messages", "pinned", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "channels", "anonymous", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "channels", "force_ghost", "INTEGER NOT NULL DEFAULT 0");
+        ensure_column(&conn, "channels", "max_ttl_secs", "INTEGER");
 
         // Table creation migrations
         conn.execute_batch(

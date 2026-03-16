@@ -3,7 +3,7 @@
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64, showRestorePrompt } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM, refreshAllMessageActions, initUserPFP, showE2EKeyPrompt } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM, refreshAllMessageActions, initUserPFP, showE2EKeyPrompt, updateGhostButton } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -389,6 +389,11 @@ export function handleServerMsg(msg) {
       const symKey = decryptChannelKey(msg.encrypted_key);
       if (symKey) {
         state.channelKeys[msg.channel] = symKey;
+        // Update has_key on the channel info so sidebar shows correct state
+        const chInfo = state.channels.find(c => c.name === msg.channel);
+        if (chInfo) chInfo.has_key = true;
+        renderChannels();
+        renderDMList();
         updateRequestKeyButton();
         if (msg.channel === state.currentChannel) {
           send('History', { channel: msg.channel, limit: 100 });
@@ -572,6 +577,37 @@ export function handleServerMsg(msg) {
       }
       break;
 
+    case 'ChannelAnonymousUpdated':
+      state.channelAnonymous[msg.channel] = msg.anonymous;
+      if (msg.channel === state.currentChannel) {
+        appendSystem(`Anonymous mode ${msg.anonymous ? 'enabled' : 'disabled'} for this channel`);
+        const anonBanner = document.getElementById('anon-banner');
+        if (anonBanner) anonBanner.style.display = msg.anonymous ? 'block' : 'none';
+        refreshAllMessageActions();
+      }
+      renderChannels();
+      break;
+
+    case 'ChannelGhostUpdated':
+      state.channelForceGhost[msg.channel] = msg.force_ghost;
+      if (msg.channel === state.currentChannel) {
+        appendSystem(`Ghost mode ${msg.force_ghost ? 'forced' : 'unforced'} for this channel`);
+        updateGhostButton();
+      }
+      break;
+
+    case 'ChannelMaxTtlUpdated':
+      if (msg.max_ttl_secs != null) {
+        state.channelMaxTtl[msg.channel] = msg.max_ttl_secs;
+      } else {
+        delete state.channelMaxTtl[msg.channel];
+      }
+      if (msg.channel === state.currentChannel) {
+        appendSystem(`Channel max TTL ${msg.max_ttl_secs != null ? 'set to ' + msg.max_ttl_secs + 's' : 'removed'}`);
+        updateGhostButton();
+      }
+      break;
+
     case 'ChannelMemberList':
       state.channelMemberList = msg.members;
       state.channelRestricted = msg.restricted;
@@ -648,6 +684,9 @@ export function handleServerMsg(msg) {
     // ── Preferences ──
     case 'Preferences':
       state.notificationPrefs = msg.prefs || {};
+      if (msg.prefs && msg.prefs.ghost_ttl) {
+        state.ghostTtl = parseInt(msg.prefs.ghost_ttl) || 86400;
+      }
       renderNotificationSettings();
       break;
 

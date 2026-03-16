@@ -4,7 +4,7 @@ import state, { on, snapshotState, restoreState, resetState } from './state.js';
 import { connectWS, disconnectWS, getConnectionState } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
-import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner, toggleUserMenu, closeUserMenu, initUserPFP, switchUserSettingsTab, initChannelContextMenu, openCreateChannel, closeCreateChannel, submitCreateChannel } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, toggleChannelAnonymous, toggleChannelGhost, setChannelMaxTtl, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner, toggleUserMenu, closeUserMenu, initUserPFP, switchUserSettingsTab, initChannelContextMenu, openCreateChannel, closeCreateChannel, submitCreateChannel, initGhostButtons, updateGhostButton, getEffectiveGhostTtl } from './chat-ui.js';
 import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, removePendingFile, startEditMessage, cancelEdit, deleteMessage, joinChannel, setupDragAndDrop, toggleRecording, cancelRecording } from './input.js';
 import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, testTurnConnectivity } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
@@ -146,6 +146,20 @@ window.scrollToMessage = scrollToMessage;
 window.openChannelSettings = openChannelSettings;
 window.closeChannelSettings = closeChannelSettings;
 window.toggleChannelRestricted = toggleChannelRestricted;
+window.toggleChannelAnonymous = toggleChannelAnonymous;
+window.toggleChannelGhost = toggleChannelGhost;
+window.setChannelMaxTtl = setChannelMaxTtl;
+window.setGhostTtlFromSettings = function(val) {
+  state.ghostTtl = parseInt(val) || 86400;
+  try { localStorage.setItem('gathering_ghost_ttl', String(state.ghostTtl)); } catch(e) {}
+  send('SetPreference', { key: 'ghost_ttl', value: String(state.ghostTtl) });
+  updateGhostButton();
+};
+window.toggleGhostFromSettings = function(checked) {
+  state.ghostMode = !!checked;
+  try { localStorage.setItem('gathering_ghost_mode', state.ghostMode ? '1' : '0'); } catch(e) {}
+  updateGhostButton();
+};
 window.addChannelMember = addChannelMember;
 window.removeChannelMember = removeChannelMember;
 window.requestChannelKey = requestChannelKey;
@@ -350,6 +364,7 @@ function showIntegrityWarning(path, expected, actual) {
 // ── Initialize ──
 initContextMenu();
 initChannelContextMenu();
+initGhostButtons();
 setupDragAndDrop();
 checkServerInfo();
 if (state.token) connectWS();
