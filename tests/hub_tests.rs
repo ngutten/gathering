@@ -28,7 +28,7 @@ fn setup() -> (Hub, Arc<Db>) {
         "delete_own_message".into(),
     ]);
     db.upsert_role("admin", &["*".into()]);
-    let hub = Hub::new(db.clone(), std::path::PathBuf::from("/tmp/gathering-test"), ServerConfig::default());
+    let hub = Hub::new(db.clone(), std::path::PathBuf::from("/tmp/gathering-test"), ServerConfig::default(), None);
     (hub, db)
 }
 
