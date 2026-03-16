@@ -29,7 +29,7 @@ jobs:
             artifact: gathering-server-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -56,7 +56,7 @@ jobs:
         if: runner.os == 'Windows'
         run: Compress-Archive -Path target/${{ matrix.target }}/release/gathering.exe -DestinationPath ${{ matrix.artifact }}.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.*
@@ -75,7 +75,7 @@ jobs:
             artifact: gathering-client-windows
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -127,7 +127,7 @@ jobs:
           Copy-Item gathering-client/src-tauri/target/release/bundle/nsis/*.exe dist/
           Copy-Item gathering-client/src-tauri/target/release/bundle/msi/*.msi dist/ -ErrorAction SilentlyContinue
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: dist/*
@@ -137,7 +137,7 @@ jobs:
     needs: [build-server, build-client]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
