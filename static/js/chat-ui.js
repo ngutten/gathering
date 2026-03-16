@@ -900,9 +900,15 @@ export function switchChannel(name) {
   if (anonBanner) anonBanner.style.display = state.channelAnonymous[name] ? '' : 'none';
   // Update ghost button state
   updateGhostButton();
-  // Hide widgets on encrypted channels (data leak risk)
+  // Disable widgets on encrypted channels (data leak risk)
   const widgetBtn = document.getElementById('widget-toolbar-btn');
-  if (widgetBtn) widgetBtn.style.display = state.encryptedChannels.has(name) ? 'none' : '';
+  if (widgetBtn) {
+    const encrypted = state.encryptedChannels.has(name);
+    widgetBtn.classList.toggle('disabled', encrypted);
+    widgetBtn.style.opacity = encrypted ? '0.35' : '';
+    widgetBtn.style.pointerEvents = encrypted ? 'none' : '';
+    widgetBtn.title = encrypted ? 'Widgets are not available on encrypted channels' : '';
+  }
   // Import switchView dynamically to avoid circular deps
   // Suppress history push — the channel switch already recorded it
   import('./topics.js').then(m => { state._skipHistoryPush = true; m.switchView('chat'); });
@@ -1799,6 +1805,9 @@ export function initChannelContextMenu() {
     if (channelName !== 'general') {
       items += `<div class="ctx-item ctx-danger" role="menuitem" data-action="leave">Leave Channel</div>`;
     }
+    if (!isDM && channelName !== 'general' && state.isAdmin) {
+      items += `<div class="ctx-item ctx-danger" role="menuitem" data-action="delete">Delete Channel</div>`;
+    }
     if (!items) { menu.style.display = 'none'; return; }
     menu.innerHTML = items;
     menu.style.display = 'block';
@@ -1820,6 +1829,9 @@ export function initChannelContextMenu() {
         if (!confirm(`Leave ${isDM ? 'DM' : '#' + channelName}?`)) return;
         send('Leave', { channel: channelName });
         if (state.currentChannel === channelName) switchChannel('general');
+      } else if (action === 'delete') {
+        if (!confirm(`Delete #${channelName}? This will permanently delete all messages, topics, and files in the channel.`)) return;
+        send('DeleteChannel', { channel: channelName });
       }
     };
   }

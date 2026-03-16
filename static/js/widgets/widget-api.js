@@ -277,6 +277,9 @@ export function onChannelSwitch(newChannel) {
   }
   updateWidgetToolbar();
 
+  // Skip widget presence on encrypted channels (server rejects them)
+  if (state.encryptedChannels.has(newChannel)) return;
+
   // Request presence from other users in this channel
   transportSend('WidgetMessage', {
     channel: newChannel,
@@ -291,6 +294,7 @@ export function onChannelSwitch(newChannel) {
 let pickerVisible = false;
 
 export function toggleWidgetPicker() {
+  if (state.encryptedChannels.has(state.currentChannel)) return;
   const picker = document.getElementById('widget-picker');
   pickerVisible = !pickerVisible;
   if (pickerVisible) {
@@ -355,8 +359,16 @@ function updateWidgetToolbar() {
     // Hide the button entirely if no widgets are enabled
     const anyEnabled = Object.keys(registry).some(id => isWidgetEnabled(id));
     btn.style.display = anyEnabled ? '' : 'none';
-    btn.classList.toggle('active', localCount > 0);
-    btn.classList.toggle('in-use', remoteWidgetIds.size > 0 && localCount === 0);
+
+    // Grey out on encrypted channels
+    const encrypted = state.encryptedChannels.has(channel);
+    btn.classList.toggle('disabled', encrypted);
+    btn.style.opacity = encrypted ? '0.35' : '';
+    btn.style.pointerEvents = encrypted ? 'none' : '';
+    btn.title = encrypted ? 'Widgets are not available on encrypted channels' : '';
+
+    btn.classList.toggle('active', !encrypted && localCount > 0);
+    btn.classList.toggle('in-use', !encrypted && remoteWidgetIds.size > 0 && localCount === 0);
 
     // Show badge with count of remotely-active widgets
     let badge = btn.querySelector('.widget-badge');
