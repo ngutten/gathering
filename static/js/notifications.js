@@ -6,6 +6,20 @@ import { escapeHtml } from './render.js';
 
 const TOAST_DURATION_MS = 5000;
 
+let notifAudio = null;
+
+function playNotificationSound() {
+  if (state.notificationPrefs.notify_sound === 'off') return;
+  try {
+    if (!notifAudio) {
+      notifAudio = new Audio('/sounds/notification.ogg');
+      notifAudio.volume = 0.5;
+    }
+    notifAudio.currentTime = 0;
+    notifAudio.play().catch(() => {});
+  } catch (e) { /* audio not available */ }
+}
+
 export function showNotification(msg, mentionType) {
   const prefKey = mentionType === 'channel' ? 'notify_channel_mention'
     : mentionType === 'server' ? 'notify_server_mention'
@@ -13,6 +27,8 @@ export function showNotification(msg, mentionType) {
   const pref = state.notificationPrefs[prefKey] || 'window';
 
   if (pref === 'none') return;
+
+  playNotificationSound();
 
   const title = `@${msg.author} in #${msg.channel}`;
   const body = msg.content.substring(0, 200);

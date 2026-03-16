@@ -17,6 +17,13 @@ impl Hub {
             return;
         }
 
+        // Check if target user has disabled DMs
+        let target_prefs = self.db.get_user_preferences(&target_user);
+        if target_prefs.get("allow_dms").map(|v| v.as_str()) == Some("none") {
+            self.send_error(id, "This user has disabled direct messages").await;
+            return;
+        }
+
         // Compute canonical DM channel name
         let mut names = [username.clone(), target_user.clone()];
         names.sort();

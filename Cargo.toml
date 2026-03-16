@@ -4,6 +4,14 @@ version = "0.1.2"
 edition = "2021"
 description = "Self-hosted encrypted chat server"
 
+[[bin]]
+name = "gathering"
+path = "src/main.rs"
+
+[[bin]]
+name = "gathering-admin"
+path = "src/bin/gathering-admin.rs"
+
 [dependencies]
 tokio = { version = "=1.36.0", features = ["full"] }
 axum = { version = "=0.6.20", features = ["ws", "multipart"] }
@@ -27,3 +35,5 @@ password-hash = "=0.5.0"
 axum-server = { version = "0.5", features = ["tls-rustls"] }
 rcgen = "0.11"
 regex = "1"
+turn = "0.17"
+webrtc-util = { version = "0.17", features = ["conn", "vnet"] }

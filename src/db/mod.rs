@@ -293,6 +293,37 @@ impl Db {
         Ok(backup_path)
     }
 
+    pub fn table_counts(&self) -> Vec<(String, i64)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tables = [
+            "users", "sessions", "channels", "messages", "files", "topics",
+            "topic_replies", "roles", "user_roles", "settings", "invite_codes",
+            "user_public_keys", "channel_encryption", "channel_keys",
+            "dm_members", "channel_members", "user_preferences",
+            "message_reactions", "widget_state", "key_backups", "user_profiles",
+            "voice_channel_ttl",
+        ];
+        let mut counts = Vec::new();
+        for table in &tables {
+            let count: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM {}", table),
+                [],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            counts.push((table.to_string(), count));
+        }
+        counts
+    }
+
+    pub fn purge_expired_sessions(&self) -> usize {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+            params![now],
+        ).unwrap_or(0)
+    }
+
     fn get_file_inner(&self, conn: &Connection, id: &str) -> Option<FileInfo> {
         conn.query_row(
             "SELECT id, filename, size, mime_type, encrypted FROM files WHERE id = ?1",

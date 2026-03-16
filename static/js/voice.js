@@ -4,7 +4,76 @@ import state, { emit } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
 
-const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+function getRtcConfig() {
+  return { iceServers: state.iceServers || [] };
+}
+
+// ── TURN connectivity test ──
+// Creates a temporary PeerConnection to gather ICE candidates and check
+// whether STUN (srflx) and TURN (relay) candidates are returned.
+export function testTurnConnectivity() {
+  const servers = state.iceServers;
+  if (!servers || servers.length === 0) {
+    emit('system-message', 'TURN test: No ICE servers configured (public_address not set on server).');
+    return;
+  }
+  emit('system-message', 'TURN test: checking connectivity...');
+  console.log('ICE servers:', JSON.stringify(servers));
+
+  const pc = new RTCPeerConnection({ iceServers: servers, iceCandidatePoolSize: 0 });
+  const candidates = { host: 0, srflx: 0, relay: 0 };
+  let done = false;
+
+  const finish = (timedOut) => {
+    if (done) return;
+    done = true;
+    pc.close();
+    const parts = [];
+    if (candidates.host) parts.push(`host: ${candidates.host}`);
+    if (candidates.srflx) parts.push(`STUN (srflx): ${candidates.srflx}`);
+    if (candidates.relay) parts.push(`TURN (relay): ${candidates.relay}`);
+
+    const summary = parts.length ? parts.join(', ') : 'none';
+    console.log('TURN test candidates:', summary, timedOut ? '(timed out)' : '');
+
+    if (candidates.relay > 0) {
+      emit('system-message', `TURN test passed — relay candidates obtained. (${summary})`);
+    } else if (candidates.srflx > 0) {
+      emit('system-message', `TURN test: STUN works but no TURN relay candidates. Check TURN credentials and that UDP ports 3478 + 49152-49252 are reachable. (${summary})`);
+    } else if (candidates.host > 0) {
+      emit('system-message', `TURN test: only local candidates — STUN/TURN server unreachable. Check that UDP port 3478 is open on the server. (${summary})`);
+    } else {
+      emit('system-message', `TURN test: no candidates gathered at all. WebRTC may be blocked.`);
+    }
+  };
+
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) {
+      finish(false);
+      return;
+    }
+    const c = e.candidate;
+    console.log(`TURN test candidate: ${c.type} ${c.protocol} ${c.address}:${c.port}`);
+    if (c.type === 'host') candidates.host++;
+    else if (c.type === 'srflx') candidates.srflx++;
+    else if (c.type === 'relay') candidates.relay++;
+  };
+
+  pc.onicegatheringstatechange = () => {
+    if (pc.iceGatheringState === 'complete') finish(false);
+  };
+
+  // Create a data channel to trigger ICE gathering
+  pc.createDataChannel('turn-test');
+  pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(err => {
+    emit('system-message', `TURN test error: ${err.message}`);
+    done = true;
+    pc.close();
+  });
+
+  // Timeout after 10 seconds
+  setTimeout(() => finish(true), 10000);
+}
 
 // ── Signal queue: serialize async handleVoiceSignal calls per-user ──
 const _signalQueues = {};  // { username: Promise }
@@ -15,15 +84,11 @@ function enqueueSignal(fromUser, signalData) {
                                  .catch(err => console.error('Signal error:', err));
 }
 
-export function createVoiceChannel() {
-  const input = document.getElementById('new-voice-channel');
-  if (!input) return;
-  let name = input.value.trim().replace(/^#/, '');
-  if (!name) return;
-  name = name.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+export function createVoiceChannel(channelName) {
+  if (!channelName) return;
+  let name = channelName.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
   if (!name) return;
   send('CreateVoiceChannel', { channel: name });
-  input.value = '';
 }
 
 export function joinVoice(channel) {
@@ -184,7 +249,7 @@ export function createPeerConnection(targetUser, isInitiator) {
     state.peerConnections[targetUser].close();
   }
 
-  const pc = new RTCPeerConnection(rtcConfig);
+  const pc = new RTCPeerConnection(getRtcConfig());
   state.peerConnections[targetUser] = pc;
 
   // Polite/impolite: alphabetically lower username is polite
@@ -195,6 +260,66 @@ export function createPeerConnection(targetUser, isInitiator) {
   pc._targetUser = targetUser;
 
   // Set up handlers BEFORE adding tracks so onnegotiationneeded is never missed
+  // ── Connection state monitoring ──
+  pc._wasConnected = false;
+  pc._iceRestartAttempts = 0;
+
+  pc.oniceconnectionstatechange = () => {
+    const iceState = pc.iceConnectionState;
+    console.log(`ICE connection to ${targetUser}: ${iceState}`);
+
+    if (iceState === 'connected' || iceState === 'completed') {
+      pc._wasConnected = true;
+      pc._iceRestartAttempts = 0;
+      // Log the connection type (direct/STUN/TURN) for diagnostics
+      if (pc.getStats) {
+        pc.getStats().then(stats => {
+          stats.forEach(report => {
+            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+              const local = stats.get(report.localCandidateId);
+              const remote = stats.get(report.remoteCandidateId);
+              if (local && remote) {
+                const via = local.candidateType === 'relay' ? 'TURN relay' :
+                            local.candidateType === 'srflx' ? 'STUN' : 'direct';
+                console.log(`Voice to ${targetUser}: connected via ${via} (${local.candidateType}/${remote.candidateType})`);
+                emit('system-message', `Voice connected to ${targetUser} (via ${via})`);
+              }
+            }
+          });
+        }).catch(() => {});
+      }
+    } else if (iceState === 'disconnected') {
+      if (pc._wasConnected) {
+        emit('system-message', `Voice connection to ${targetUser} interrupted — attempting to reconnect...`);
+      } else {
+        emit('system-message', `Voice connection to ${targetUser} could not be established. Check that UDP ports 3478 and 49152-49252 are forwarded/open on the server.`);
+      }
+    } else if (iceState === 'failed') {
+      if (pc._wasConnected) {
+        emit('system-message', `Voice connection to ${targetUser} lost.`);
+      } else {
+        emit('system-message', `Voice connection to ${targetUser} failed — no route found. Ensure the TURN server is reachable and UDP ports 3478 + 49152-49252 are open.`);
+      }
+      // Try one ICE restart
+      if (pc._iceRestartAttempts < 1 && pc.signalingState === 'stable' && !pc._makingOffer) {
+        pc._iceRestartAttempts++;
+        pc._makingOffer = true;
+        pc.createOffer({ iceRestart: true }).then(offer => {
+          if (pc.signalingState !== 'stable') return;
+          return pc.setLocalDescription(offer);
+        }).then(() => {
+          if (pc.localDescription) {
+            send('VoiceSignal', {
+              target_user: targetUser,
+              signal_data: { type: 'offer', sdp: pc.localDescription }
+            });
+          }
+        }).catch(err => console.error('ICE restart error:', err))
+          .finally(() => { pc._makingOffer = false; });
+      }
+    }
+  };
+
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       send('VoiceSignal', {

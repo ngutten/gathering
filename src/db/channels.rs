@@ -151,4 +151,61 @@ impl Db {
     pub fn is_dm_channel(name: &str) -> bool {
         name.starts_with("dm:")
     }
+
+    pub fn list_channels_full(&self) -> Vec<(String, String, bool, Option<String>, i64)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT c.name, COALESCE(c.channel_type, 'text'), c.restricted, c.created_by,
+                    (SELECT COUNT(*) FROM messages m WHERE m.channel = c.name)
+             FROM channels c ORDER BY c.name"
+        ) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::channels] list_channels_full prepare failed: {e}"); return Vec::new(); }
+        };
+        let result = match stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i32>(2).unwrap_or(0) != 0,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::channels] list_channels_full query failed: {e}"); Vec::new() }
+        };
+        result
+    }
+
+    pub fn clear_channel_messages(&self, channel: &str) -> Result<usize, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        if !conn.query_row(
+            "SELECT COUNT(*) > 0 FROM channels WHERE name = ?1",
+            params![channel],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false) {
+            return Err("Channel not found".into());
+        }
+
+        conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+        let result = (|| -> Result<usize, String> {
+            // Delete reactions for messages in this channel
+            conn.execute(
+                "DELETE FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE channel = ?1)",
+                params![channel],
+            ).map_err(|e| e.to_string())?;
+            let count = conn.execute(
+                "DELETE FROM messages WHERE channel = ?1",
+                params![channel],
+            ).map_err(|e| e.to_string())?;
+            Ok(count)
+        })();
+        if result.is_ok() {
+            conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        } else {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+        result
+    }
 }

@@ -8,6 +8,8 @@
   "channel_creation": "all",
   "allow_key_backup": true,
   "enabled_widgets": null,
+  "public_address": null,
+  "turn_port": 3478,
   "default_roles": {
     "user": [
       "send_message",

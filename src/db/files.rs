@@ -124,4 +124,47 @@ impl Db {
         };
         result
     }
+
+    pub fn list_all_files(&self, user: Option<&str>, channel: Option<&str>) -> Vec<(String, String, i64, String, String, String)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sql = "SELECT id, filename, size, uploader, channel, created_at FROM files".to_string();
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut conditions = Vec::new();
+        if let Some(u) = user {
+            params_vec.push(Box::new(u.to_string()));
+            conditions.push(format!("uploader = ?{}", params_vec.len()));
+        }
+        if let Some(c) = channel {
+            params_vec.push(Box::new(c.to_string()));
+            conditions.push(format!("channel = ?{}", params_vec.len()));
+        }
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+        sql.push_str(" ORDER BY created_at DESC");
+
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[db::files] list_all_files prepare failed: {e}"); return Vec::new(); }
+        };
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let result = match stmt.query_map(param_refs.as_slice(), |row| Ok((
+            row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+        ))) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => { eprintln!("[db::files] list_all_files query failed: {e}"); Vec::new() }
+        };
+        result
+    }
+
+    pub fn file_stats(&self) -> (i64, i64) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM files",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        ).unwrap_or((0, 0))
+    }
 }

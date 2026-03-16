@@ -136,11 +136,7 @@ impl Hub {
         self.save_config_to_disk();
 
         let settings = self.db.get_settings();
-        if let Some(client) = clients.get(&id) {
-            if let Err(e) = Self::send_to(&client.tx, &ServerMsg::Settings { settings }) {
-                eprintln!("[hub::admin] send updated settings failed: {e:?}");
-            }
-        }
+        Self::broadcast_all_inner(&clients, &ServerMsg::Settings { settings }, None);
     }
 
     pub(super) async fn handle_create_invite(&self, id: usize) {

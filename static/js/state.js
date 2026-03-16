@@ -103,6 +103,9 @@ const INITIAL_STATE = {
   serverProtocolVersion: null,
   serverCapabilities: [],
 
+  // ICE servers (STUN/TURN config from server)
+  iceServers: [],
+
   // Server branding (from /api/server-info)
   serverName: null,
   serverIcon: null,

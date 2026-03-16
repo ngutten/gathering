@@ -40,7 +40,7 @@ export function renderTopicList(topics) {
       displayTitle = tryDecrypt(t.title, t.channel || state.currentChannel);
       encBadge = renderEncryptedBadge(true);
     }
-    return `<div class="topic-item${t.pinned ? ' pinned' : ''}" onclick="openTopic('${escapeHtml(t.id)}')">
+    return `<div class="topic-item${t.pinned ? ' pinned' : ''}"${t.expires_at ? ` data-expires-at="${escapeHtml(t.expires_at)}"` : ''} onclick="openTopic('${escapeHtml(t.id)}')">
       <div class="topic-title">${t.pinned ? '<span class="topic-pin-icon">&#x1F4CC;</span>' : ''}${escapeHtml(displayTitle)}${encBadge}</div>
       <div class="topic-meta">by ${escapeHtml(t.author)} &middot; ${time}${t.expires_at ? ' ' + renderTtlBadge(t.expires_at) : ''}</div>
       <div class="topic-stats">${t.reply_count} ${t.reply_count === 1 ? 'reply' : 'replies'} &middot; last activity ${lastAct}</div>
@@ -132,6 +132,11 @@ export function renderThread(topic, replies) {
   bodyEl.setAttribute('data-topic-body', displayBody);
   bodyEl.setAttribute('data-topic-title', displayTitle);
   bodyEl.setAttribute('data-topic-encrypted', topic.encrypted ? '1' : '0');
+  if (topic.expires_at) {
+    bodyEl.setAttribute('data-expires-at', topic.expires_at);
+  } else {
+    bodyEl.removeAttribute('data-expires-at');
+  }
   bodyEl.innerHTML = `<div class="meta"><span class="author">${escapeHtml(topic.author)}</span> <span class="time">${time}</span>${ttlHtml}${encBadge}${editedHtml}</div><div class="body">${renderRichContent(displayBody)}</div>${renderAttachmentsHtml(topic.attachments)}`;
   decryptAndRenderAttachments(topic.attachments);
   const repliesEl = document.getElementById('thread-replies');
@@ -146,6 +151,7 @@ export function appendTopicReply(reply) {
   div.setAttribute('data-reply-id', reply.id);
   div.setAttribute('data-author', reply.author);
   div.setAttribute('data-encrypted', reply.encrypted ? '1' : '0');
+  if (reply.expires_at) div.setAttribute('data-expires-at', reply.expires_at);
 
   let displayContent = reply.content;
   let encBadge = '';

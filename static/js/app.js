@@ -4,9 +4,9 @@ import state, { on, snapshotState, restoreState, resetState } from './state.js';
 import { connectWS, disconnectWS, getConnectionState } from './transport.js';
 import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
-import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner, toggleUserMenu, closeUserMenu, initUserPFP, switchUserSettingsTab, initChannelContextMenu, openCreateChannel, closeCreateChannel, submitCreateChannel } from './chat-ui.js';
 import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, removePendingFile, startEditMessage, cancelEdit, deleteMessage, joinChannel, setupDragAndDrop, toggleRecording, cancelRecording } from './input.js';
-import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare } from './voice.js';
+import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, testTurnConnectivity } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
 import { openAdminPanel, closeAdminPanel, switchAdminTab, updateSetting, deleteChannel, createInvite, assignRoleToUser, removeRoleFromUser } from './admin.js';
 import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest, generateE2EKey, rekeyChannel, setupKeySync } from './crypto.js';
@@ -66,6 +66,9 @@ window.doLogin = doLogin;
 window.doRegister = doRegister;
 window.doLogout = doLogout;
 window.joinChannel = joinChannel;
+window.openCreateChannel = openCreateChannel;
+window.closeCreateChannel = closeCreateChannel;
+window.submitCreateChannel = submitCreateChannel;
 window.switchChannel = switchChannel;
 window.sendMessage = sendMessage;
 window.handleInputKey = handleInputKey;
@@ -85,6 +88,7 @@ window.toggleDeafen = toggleDeafen;
 window.createVoiceChannel = createVoiceChannel;
 window.toggleCamera = toggleCamera;
 window.toggleScreenShare = toggleScreenShare;
+window.testTurnConnectivity = testTurnConnectivity;
 window.switchView = switchView;
 window.openTopic = openTopic;
 window.backToTopics = backToTopics;
@@ -162,10 +166,14 @@ function closeSidebar() {
 }
 // Auto-close sidebar on mobile when switching channels
 on('channel-switched', closeSidebar);
-// Auto-close sidebar when any button inside it is clicked
+// Auto-close sidebar when any button inside it is clicked (except PFP menu area)
 document.querySelector('.sidebar').addEventListener('click', (e) => {
+  if (e.target.closest('.user-pfp-menu-wrap')) return;
   if (e.target.closest('button')) closeSidebar();
 });
+window.toggleUserMenu = toggleUserMenu;
+window.closeUserMenu = closeUserMenu;
+window.switchUserSettingsTab = switchUserSettingsTab;
 window.openProfile = openProfile;
 window.closeProfile = closeProfile;
 window.openEditProfile = openEditProfile;
@@ -341,6 +349,7 @@ function showIntegrityWarning(path, expected, actual) {
 
 // ── Initialize ──
 initContextMenu();
+initChannelContextMenu();
 setupDragAndDrop();
 checkServerInfo();
 if (state.token) connectWS();

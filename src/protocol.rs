@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde::de;
 use std::collections::{HashMap, BTreeMap};
+use std::fmt;
 use uuid::Uuid;
 
 // ── Protocol versioning ─────────────────────────────────────────────
@@ -22,6 +24,9 @@ pub fn build_capabilities(config: &ServerConfig) -> Vec<String> {
     let mut caps: Vec<String> = SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect();
     if config.allow_key_backup {
         caps.push("key_backup".to_string());
+    }
+    if config.public_address.is_some() {
+        caps.push("embedded_turn".to_string());
     }
     // Advertise which widgets are enabled. `None` = all (blanket "widgets" already in base caps).
     // `Some(list)` = replace blanket with specific `widget:<id>` entries.
@@ -226,6 +231,8 @@ pub enum ServerMsg {
         protocol_version: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ice_servers: Option<Vec<IceServer>>,
     },
     /// A chat message (new or historical)
     Message {
@@ -529,6 +536,17 @@ pub struct SearchResult {
     pub timestamp: String,
 }
 
+// ── ICE server config (sent to clients for WebRTC) ──────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+}
+
 // ── Config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -555,6 +573,52 @@ pub struct ServerConfig {
     /// An empty list disables all widgets. A non-empty list enables only those widget IDs.
     #[serde(default)]
     pub enabled_widgets: Option<Vec<String>>,
+    /// Public IP or hostname for embedded STUN/TURN. `null` = disabled (LAN voice only).
+    /// Accepts both quoted strings ("192.168.1.1") and unquoted numbers in JSON.
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    pub public_address: Option<String>,
+    /// UDP port for embedded STUN/TURN server. Default 3478.
+    #[serde(default = "ServerConfig::default_turn_port")]
+    pub turn_port: u16,
+}
+
+/// Deserialize a value that could be a JSON string, number, or null into Option<String>.
+/// This lets users write `"public_address": 192.168.1.1` (unquoted) without a parse error.
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    struct StringOrNumber;
+
+    impl<'de> de::Visitor<'de> for StringOrNumber {
+        type Value = Option<String>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a string, number, or null")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            if v.is_empty() { Ok(None) } else { Ok(Some(v.to_string())) }
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            // A bare IP like 10.0 gets parsed as a float
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrNumber)
 }
 
 impl ServerConfig {
@@ -562,6 +626,7 @@ impl ServerConfig {
     fn default_allow_key_backup() -> bool { true }
     fn default_registration_mode() -> String { "open".to_string() }
     fn default_channel_creation() -> String { "all".to_string() }
+    fn default_turn_port() -> u16 { 3478 }
 }
 
 impl Default for ServerConfig {
@@ -589,6 +654,8 @@ impl Default for ServerConfig {
             registration_mode: Self::default_registration_mode(),
             channel_creation: Self::default_channel_creation(),
             enabled_widgets: None,
+            public_address: None,
+            turn_port: Self::default_turn_port(),
         }
     }
 }

@@ -72,4 +72,12 @@ impl Db {
         }
         Ok(())
     }
+
+    pub fn purge_used_invites(&self) -> usize {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "DELETE FROM invite_codes WHERE used_by IS NOT NULL",
+            [],
+        ).unwrap_or(0)
+    }
 }

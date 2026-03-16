@@ -3,6 +3,7 @@ mod tls;
 use gathering::db;
 use gathering::hub;
 use gathering::protocol;
+use gathering::turn;
 
 use axum::{
     Extension, Router,
@@ -69,7 +70,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "gathering=info".into()),
+                .unwrap_or_else(|_| "gathering=info,turn=info,webrtc_util=warn".into()),
         )
         .init();
 
@@ -129,10 +130,53 @@ async fn main() {
         }
     }
 
+    // Start embedded TURN server if public_address is configured
+    let lan_ip = turn::detect_lan_ip();
+    let turn_secret = if config.public_address.is_some() {
+        let secret = turn::load_or_generate_secret(&data_dir);
+        match turn::start_turn_server(
+            config.public_address.as_ref().unwrap(),
+            config.turn_port,
+            &secret,
+            lan_ip,
+        )
+        .await
+        {
+            Ok(_server) => {
+                tracing::info!(
+                    "Embedded TURN server on UDP port {}, relay ports {}-{}, public_address={}",
+                    config.turn_port,
+                    49152, 49252,
+                    config.public_address.as_ref().unwrap()
+                );
+                if let Some(lip) = lan_ip {
+                    tracing::info!(
+                        "Detected LAN IP {} — relay address set to LAN IP (hairpin NAT workaround)",
+                        lip
+                    );
+                }
+                tracing::info!(
+                    "For verbose TURN diagnostics, set RUST_LOG=gathering=info,turn=debug"
+                );
+                // _server is kept alive by being moved into this scope;
+                // it runs background tasks via tokio::spawn internally.
+                // We leak the handle to keep it alive for the server's lifetime.
+                std::mem::forget(_server);
+                Some(secret)
+            }
+            Err(e) => {
+                tracing::error!("Failed to start TURN server: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let config_port = config.port;
     let config_http_port = config.http_port;
 
-    let hub = Hub::new(db.clone(), data_dir.clone(), config.clone());
+    let hub = Hub::new(db.clone(), data_dir.clone(), config.clone(), turn_secret);
     let state = Arc::new(AppState {
         hub,
         db: db.clone(),
@@ -193,8 +237,9 @@ async fn main() {
         .layer(CorsLayer::new()
             .allow_origin(AllowOrigin::predicate(|origin, _| {
                 // Allow same-origin (browser) + Tauri desktop origins
+                // macOS/Linux: tauri://localhost, Windows: http://tauri.localhost
                 let o = origin.as_bytes();
-                o.starts_with(b"tauri://") || o.starts_with(b"https://tauri.")
+                o.starts_with(b"tauri://") || o.starts_with(b"https://tauri.") || o.starts_with(b"http://tauri.")
             }))
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
             .allow_methods([http::Method::GET, http::Method::POST])

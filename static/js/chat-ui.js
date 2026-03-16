@@ -1,9 +1,9 @@
 // chat-ui.js — Message rendering, channel list, online users, DMs, typing
 
-import state, { isDMChannel, emit } from './state.js';
+import state, { isDMChannel, emit, serverHas } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime, isVideoMime, renderAttachmentsHtml, decryptAndRenderAttachments, renderTtlBadge, renderEncryptedBadge } from './render.js';
-import { tryDecrypt } from './crypto.js';
+import { tryDecrypt, getKeyFingerprint, generateChannelKey, encryptChannelKeyForUser, generateE2EKey, importPrivateKey } from './crypto.js';
 import { apiUrl, fileUrl } from './config.js';
 import { openReactionPicker, closeReactionPicker } from './emoji.js';
 import { scopedSet } from './storage.js';
@@ -86,12 +86,12 @@ function closeOverlay(overlayId) {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const overlays = [
+    { id: 'create-channel-overlay', close: 'closeCreateChannel' },
     { id: 'user-settings-overlay', close: 'closeUserSettings' },
     { id: 'profile-overlay', close: 'closeProfile' },
     { id: 'admin-overlay', close: 'closeAdminPanel' },
     { id: 'channel-settings-overlay', close: 'closeChannelSettings' },
     { id: 'pinned-messages-overlay', close: 'closePinnedPanel' },
-    { id: 'files-overlay', close: 'closeFileManager' },
   ];
   for (const { id, close } of overlays) {
     const el = document.getElementById(id);
@@ -103,6 +103,83 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ── Create Channel Dialog ──
+
+let _createChannelType = 'text';
+
+export function openCreateChannel(type) {
+  _createChannelType = type || 'text';
+  const isVoice = _createChannelType === 'voice';
+  document.getElementById('create-channel-title').textContent = isVoice ? 'Create Voice Channel' : 'Create Channel';
+
+  const content = document.getElementById('create-channel-content');
+  let html = '<div class="create-channel-form">';
+  html += '<input type="text" id="create-channel-name" placeholder="channel-name" autocomplete="off"' +
+          ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();submitCreateChannel();}">';
+
+  if (!isVoice) {
+    html += '<label class="create-channel-toggle"><span>Encrypted (E2E)</span>' +
+            '<input type="checkbox" id="create-channel-encrypted" style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer;"></label>' +
+            '<div class="create-channel-toggle-desc">Messages encrypted end-to-end. Requires an E2E key.</div>';
+    html += '<label class="create-channel-toggle"><span>Restricted</span>' +
+            '<input type="checkbox" id="create-channel-restricted" style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer;"></label>' +
+            '<div class="create-channel-toggle-desc">Only invited members can access.</div>';
+  }
+
+  html += '<div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.2rem;">' +
+          '<button class="btn-secondary" onclick="closeCreateChannel()" style="padding:0.4rem 1rem;border-radius:4px;font-family:inherit;font-size:0.8rem;cursor:pointer;">Cancel</button>' +
+          '<button class="btn-primary" onclick="submitCreateChannel()" style="padding:0.4rem 1rem;border-radius:4px;font-family:inherit;font-size:0.8rem;cursor:pointer;">Create</button>' +
+          '</div></div>';
+
+  content.innerHTML = html;
+  openOverlay('create-channel-overlay');
+  setTimeout(() => document.getElementById('create-channel-name')?.focus(), 50);
+}
+
+export function closeCreateChannel() {
+  closeOverlay('create-channel-overlay');
+}
+
+export function submitCreateChannel() {
+  const input = document.getElementById('create-channel-name');
+  if (!input) return;
+  let name = input.value.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  if (!name || isDMChannel(name)) return;
+
+  if (_createChannelType === 'voice') {
+    import('./voice.js').then(m => m.createVoiceChannel(name));
+    closeCreateChannel();
+    return;
+  }
+
+  // Text channel
+  const encCheck = document.getElementById('create-channel-encrypted');
+  const restrictCheck = document.getElementById('create-channel-restricted');
+  const wantEncrypted = encCheck && encCheck.checked;
+  const wantRestricted = restrictCheck && restrictCheck.checked;
+
+  if (wantEncrypted && !state.e2eReady) {
+    appendSystem('Generate or import an E2E key before creating encrypted channels.');
+    return;
+  }
+
+  if (wantEncrypted && state.e2eReady) {
+    const chKey = generateChannelKey();
+    state.channelKeys[name] = chKey;
+    const sealedForSelf = encryptChannelKeyForUser(chKey, sodium.to_base64(state.myKeyPair.publicKey));
+    send('CreateEncryptedChannel', { channel: name, encrypted_channel_key: sealedForSelf });
+  }
+
+  send('Join', { channel: name });
+
+  if (wantRestricted) {
+    setTimeout(() => send('SetChannelRestricted', { channel: name, restricted: true }), 300);
+  }
+
+  closeCreateChannel();
+  switchChannel(name);
+}
+
 
 export function appendMessage(msg) {
   if (msg.channel && msg.channel !== state.currentChannel) return;
@@ -113,6 +190,7 @@ export function appendMessage(msg) {
   div.setAttribute('data-msg-id', msg.id);
   div.setAttribute('data-author', msg.author);
   div.setAttribute('data-timestamp', msg.timestamp);
+  if (msg.expires_at) div.setAttribute('data-expires-at', msg.expires_at);
 
   const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const ttlHtml = renderTtlBadge(msg.expires_at);
@@ -281,6 +359,12 @@ export function appendSystem(text) {
   el.scrollTop = el.scrollHeight;
 }
 
+function updateSidebarActiveClasses() {
+  document.querySelectorAll('#channel-list .channel-item, #dm-list .dm-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.channel === state.currentChannel);
+  });
+}
+
 export function renderChannels() {
   state.channels.forEach(ch => { if (ch.encrypted) state.encryptedChannels.add(ch.name); });
 
@@ -294,6 +378,7 @@ export function renderChannels() {
 
   // Skip DOM rebuild if focus is inside — avoids stealing focus mid-tab
   if (document.activeElement && el.contains(document.activeElement)) {
+    updateSidebarActiveClasses();
     renderVoiceChannelList();
     return;
   }
@@ -309,7 +394,7 @@ export function renderChannels() {
     return `<div class="channel-item${boldClass}${noKeyClass} ${ch.name === state.currentChannel ? 'active' : ''}"
          onclick="switchChannel('${escapeHtml(ch.name)}')" tabindex="0" role="button" data-channel="${escapeHtml(ch.name)}"
          aria-label="${escapeHtml(ch.name)} channel${unread > 0 ? ', ' + unread + ' unread' : ''}"
-         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();switchChannel('${escapeHtml(ch.name)}');}">
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if('${escapeHtml(ch.name)}'===window._gatheringState.currentChannel){var r=this.getBoundingClientRect();this.dispatchEvent(new MouseEvent('contextmenu',{clientX:r.left+20,clientY:r.bottom,bubbles:true}));}else{switchChannel('${escapeHtml(ch.name)}');}}">
       <span>${lock}${escapeHtml(ch.name)}</span>
       <span class="channel-right">${unreadBadge}<span class="count">${ch.user_count}</span></span>
     </div>`;
@@ -408,6 +493,7 @@ export function renderDMList() {
 
   // Skip DOM rebuild if focus is inside — avoids stealing focus mid-tab
   if (document.activeElement && el.contains(document.activeElement)) {
+    updateSidebarActiveClasses();
     return;
   }
 
@@ -623,6 +709,81 @@ export function removeChannelMember(channel, username) {
   setTimeout(() => send('GetChannelMembers', { channel }), CHANNEL_SETTINGS_REFRESH_DELAY_MS);
 }
 
+/**
+ * Show a dialog prompting the user to generate/import an E2E key or go back.
+ * Only shown when the user actively navigates to an encrypted context without a key.
+ */
+export function showE2EKeyPrompt(onAbort) {
+  const existing = document.getElementById('e2e-key-prompt-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'e2e-key-prompt-overlay';
+  overlay.className = 'admin-overlay active';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="admin-panel" style="width:380px;">
+      <div class="admin-panel-header">
+        <h2>Encryption Key Required</h2>
+      </div>
+      <div class="admin-tab-content">
+        <div style="margin-bottom:1rem;font-size:0.85rem;color:var(--text2);">
+          This channel uses end-to-end encryption. You need an E2E key to participate.
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button class="profile-save-btn" id="e2e-prompt-generate">Generate Key</button>
+          <button class="profile-edit-btn" id="e2e-prompt-import">Import Key</button>
+          <button class="profile-edit-btn" id="e2e-prompt-abort" style="border-color:var(--text2);color:var(--text2);">Go Back</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+
+  document.getElementById('e2e-prompt-generate').onclick = () => {
+    close();
+    generateE2EKey(false);
+    // Auto-request channel key now that we have an E2E key
+    const ch = state.currentChannel;
+    if (state.encryptedChannels.has(ch) && !state.channelKeys[ch]) {
+      send('RequestChannelKey', { channel: ch });
+    }
+    updateRequestKeyButton();
+  };
+
+  document.getElementById('e2e-prompt-import').onclick = () => {
+    close();
+    importPrivateKey();
+    // importPrivateKey is async (file picker) — poll for completion
+    const ch = state.currentChannel;
+    const check = setInterval(() => {
+      if (state.e2eReady) {
+        clearInterval(check);
+        if (state.encryptedChannels.has(ch) && !state.channelKeys[ch]) {
+          send('RequestChannelKey', { channel: ch });
+        }
+        updateRequestKeyButton();
+      }
+    }, 200);
+    setTimeout(() => clearInterval(check), 30000);
+  };
+
+  document.getElementById('e2e-prompt-abort').onclick = () => {
+    close();
+    if (onAbort) onAbort();
+  };
+
+  overlay.onclick = (e) => {
+    if (e.target === overlay) {
+      close();
+      if (onAbort) onAbort();
+    }
+  };
+}
+
 export function switchChannel(name) {
   const prev = state.currentChannel;
   const prevView = state.currentView;
@@ -677,7 +838,11 @@ export function switchChannel(name) {
   // before widget presence requests are sent
   emit('channel-switched', name);
   if (state.encryptedChannels.has(name) && !state.e2eReady) {
-    appendSystem('This is an encrypted channel. Generate or import an E2E key (bottom of sidebar) to participate.');
+    if (state._suppressE2EPrompt) {
+      state._suppressE2EPrompt = false;
+    } else {
+      showE2EKeyPrompt(() => switchChannel(prev || 'general'));
+    }
   } else if (state.encryptedChannels.has(name) && !state.channelKeys[name] && state.e2eReady) {
     send('RequestChannelKey', { channel: name });
   }
@@ -1029,25 +1194,123 @@ export async function uploadAvatar(input) {
   }
 }
 
-// ── User Settings panel ──
+// ── PFP user menu ──
 
-export function openUserSettings() {
+export function initUserPFP() {
+  const avatarEl = document.getElementById('user-pfp-avatar');
+  if (avatarEl && state.currentUser) {
+    avatarEl.innerHTML = avatarHtml(state.currentUser, 28);
+  }
+  const nameEl = document.getElementById('user-bar-name');
+  if (nameEl && state.currentUser) {
+    nameEl.textContent = state.currentUser;
+  }
+}
+
+export function toggleUserMenu() {
+  const dropdown = document.getElementById('user-pfp-dropdown');
+  const btn = document.getElementById('user-pfp-btn');
+  if (!dropdown) return;
+  const visible = dropdown.style.display !== 'none';
+  if (visible) {
+    closeUserMenu();
+  } else {
+    // Populate dynamic content
+    const adminItem = document.getElementById('pfp-admin-item');
+    if (adminItem) adminItem.style.display = state.isAdmin ? '' : 'none';
+    dropdown.style.display = 'block';
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    // Focus first menu item
+    const firstItem = dropdown.querySelector('[role="menuitem"]');
+    if (firstItem) firstItem.focus();
+  }
+}
+
+export function closeUserMenu() {
+  const dropdown = document.getElementById('user-pfp-dropdown');
+  const btn = document.getElementById('user-pfp-btn');
+  if (dropdown) dropdown.style.display = 'none';
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+// Click-outside listener for PFP menu
+document.addEventListener('click', (e) => {
+  const wrap = document.querySelector('.user-pfp-menu-wrap');
+  if (wrap && !wrap.contains(e.target)) closeUserMenu();
+});
+
+// Keyboard navigation for PFP dropdown
+document.addEventListener('keydown', (e) => {
+  const dropdown = document.getElementById('user-pfp-dropdown');
+  if (!dropdown || dropdown.style.display === 'none') return;
+  const items = [...dropdown.querySelectorAll('[role="menuitem"]')].filter(i => i.style.display !== 'none');
+  const idx = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    items[(idx + 1) % items.length].focus();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    items[(idx - 1 + items.length) % items.length].focus();
+  } else if (e.key === 'Escape') {
+    closeUserMenu();
+    const btn = document.getElementById('user-pfp-btn');
+    if (btn) btn.focus();
+  } else if (e.key === 'Enter' && idx >= 0) {
+    e.preventDefault();
+    items[idx].click();
+  }
+});
+
+// ── User Settings panel (tabbed) ──
+
+let _currentSettingsTab = 'profile';
+
+export function openUserSettings(tab) {
+  _currentSettingsTab = tab || 'profile';
+  // Activate correct tab button
+  const tabBar = document.getElementById('user-settings-tabs');
+  if (tabBar) {
+    tabBar.querySelectorAll('button').forEach(btn => {
+      btn.classList.toggle('active', btn.textContent.toLowerCase() === _currentSettingsTab);
+    });
+  }
+  renderUserSettingsTab(_currentSettingsTab);
+  openOverlay('user-settings-overlay');
+  send('GetProfile', { username: state.currentUser });
+}
+
+export function switchUserSettingsTab(tab, btn) {
+  // If leaving files tab, clear file manager state
+  if (_currentSettingsTab === 'files' && tab !== 'files') {
+    state.fileManagerOpen = false;
+  }
+  _currentSettingsTab = tab;
+  const tabBar = document.getElementById('user-settings-tabs');
+  if (tabBar) {
+    tabBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  }
+  if (btn) btn.classList.add('active');
+  renderUserSettingsTab(tab);
+}
+
+function renderUserSettingsTab(tab) {
   const el = document.getElementById('user-settings-content');
+  if (!el) return;
+  switch (tab) {
+    case 'profile': renderProfileTab(el); break;
+    case 'notifications': renderNotificationsTab(el); break;
+    case 'files': renderFilesTab(el); break;
+    case 'encryption': renderEncryptionTab(el); break;
+  }
+}
+
+function renderProfileTab(el) {
   const profile = state.profileCache[state.currentUser] || {};
   const avatarBig = profile.avatar_id
     ? `<img class="profile-avatar-big" src="${fileUrl('/api/files/' + profile.avatar_id)}" alt="">`
     : avatarHtml(state.currentUser, 80);
   const statusVal = escapeHtml(profile.status || '');
   const aboutVal = escapeHtml(profile.about || '');
-
-  // Notification prefs
-  const prefs = state.notificationPrefs || {};
-  const optionsHtml = (key) => {
-    const val = prefs[key] || 'window';
-    return ['window', 'system', 'none'].map(v =>
-      `<option value="${v}"${v === val ? ' selected' : ''}>${v}</option>`
-    ).join('');
-  };
 
   el.innerHTML = `
     <div class="profile-card">
@@ -1070,23 +1333,95 @@ export function openUserSettings() {
         <label class="profile-label">About</label>
         <textarea id="settings-about-input" maxlength="1024" rows="3" placeholder="Tell others about yourself">${aboutVal}</textarea>
       </div>
-      <div class="profile-edit-section" style="margin-bottom:1rem;">
+      <div class="profile-edit-section">
         <button class="profile-save-btn" onclick="saveUserSettings()">Save Profile</button>
-      </div>
-      <div style="border-top:1px solid var(--border);padding-top:0.8rem;">
-        <div class="profile-label" style="margin-bottom:0.5rem;">Notifications</div>
-        <div class="notif-setting"><label>@mention</label><select onchange="setNotifPref('notify_mention',this.value)">${optionsHtml('notify_mention')}</select></div>
-        <div class="notif-setting"><label>@channel</label><select onchange="setNotifPref('notify_channel_mention',this.value)">${optionsHtml('notify_channel_mention')}</select></div>
-        <div class="notif-setting"><label>@server</label><select onchange="setNotifPref('notify_server_mention',this.value)">${optionsHtml('notify_server_mention')}</select></div>
       </div>
     </div>
   `;
-  openOverlay('user-settings-overlay');
-  // Fetch fresh profile data
-  send('GetProfile', { username: state.currentUser });
+}
+
+function renderNotificationsTab(el) {
+  const prefs = state.notificationPrefs || {};
+  const optionsHtml = (key) => {
+    const val = prefs[key] || 'window';
+    return ['window', 'system', 'none'].map(v =>
+      `<option value="${v}"${v === val ? ' selected' : ''}>${v}</option>`
+    ).join('');
+  };
+
+  const dmVal = prefs.allow_dms || 'everyone';
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-label" style="margin-bottom:0.5rem;">Notification Preferences</div>
+      <div class="notif-setting"><label>@mention</label><select onchange="setNotifPref('notify_mention',this.value)">${optionsHtml('notify_mention')}</select></div>
+      <div class="notif-setting"><label>@channel</label><select onchange="setNotifPref('notify_channel_mention',this.value)">${optionsHtml('notify_channel_mention')}</select></div>
+      <div class="notif-setting"><label>@server</label><select onchange="setNotifPref('notify_server_mention',this.value)">${optionsHtml('notify_server_mention')}</select></div>
+      <div class="notif-setting"><label>Sound</label><select onchange="setNotifPref('notify_sound',this.value)">${['on','off'].map(v => `<option value="${v}"${v === (prefs.notify_sound || 'on') ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
+    </div>
+    <div class="profile-card" style="margin-top:0.8rem;">
+      <div class="profile-label" style="margin-bottom:0.5rem;">Privacy</div>
+      <div class="notif-setting"><label>Allow DMs</label><select onchange="setNotifPref('allow_dms',this.value)">${['everyone','none'].map(v => `<option value="${v}"${v === dmVal ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
+    </div>
+  `;
+}
+
+function renderFilesTab(el) {
+  el.innerHTML = '<div id="files-content"><div style="color:var(--text2);font-size:0.8rem;">Loading files...</div></div>';
+  state.fileManagerOpen = true;
+  send('ListMyFiles');
+}
+
+function renderEncryptionTab(el) {
+  const hasKey = !!state.myKeyPair;
+  const fp = hasKey ? getKeyFingerprint() : '';
+  const showSync = serverHas('key_backup');
+
+  let buttonsHtml;
+  if (hasKey) {
+    buttonsHtml = `
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.8rem;">
+        <button class="profile-edit-btn" onclick="exportPrivateKey()">Export Key</button>
+        <button class="profile-edit-btn" onclick="importPrivateKey()">Import Key</button>
+        ${showSync ? '<button class="profile-edit-btn" onclick="setupKeySync()">Sync</button>' : ''}
+        <button class="profile-edit-btn" style="border-color:var(--orange);color:var(--orange);" onclick="generateNewE2EKey()">Regenerate Key</button>
+      </div>
+    `;
+  } else {
+    buttonsHtml = `
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.8rem;">
+        <button class="profile-save-btn" onclick="generateNewE2EKey()">Generate Key</button>
+        <button class="profile-edit-btn" onclick="importPrivateKey()">Import Key</button>
+      </div>
+    `;
+  }
+
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-label" style="margin-bottom:0.5rem;">End-to-End Encryption</div>
+      <div style="margin-bottom:0.5rem;">
+        <span style="font-size:0.85rem;">Status: </span>
+        ${hasKey
+          ? `<span style="color:var(--green);font-size:0.85rem;">Key active</span>`
+          : `<span style="color:var(--red);font-size:0.85rem;">No key set</span>`
+        }
+      </div>
+      ${hasKey ? `
+        <div style="margin-bottom:0.5rem;">
+          <span style="font-size:0.75rem;color:var(--text2);">Fingerprint: </span>
+          <code style="font-size:0.75rem;color:var(--green);">${fp}</code>
+        </div>
+      ` : `
+        <div style="font-size:0.8rem;color:var(--text2);margin-bottom:0.5rem;">
+          Generate or import a key to participate in encrypted channels and DMs.
+        </div>
+      `}
+      ${buttonsHtml}
+    </div>
+  `;
 }
 
 export function closeUserSettings() {
+  state.fileManagerOpen = false;
   closeOverlay('user-settings-overlay');
 }
 
@@ -1227,6 +1562,129 @@ export function initContextMenu() {
   });
 
   // Dismiss on click/tap elsewhere or Escape
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target)) menu.style.display = 'none';
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') menu.style.display = 'none';
+  });
+}
+
+// ── Channel context menu (right-click on channel/DM list) ──
+
+export function initChannelContextMenu() {
+  const menu = document.createElement('div');
+  menu.id = 'channel-context-menu';
+  menu.className = 'msg-context-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Channel actions');
+  menu.style.display = 'none';
+  document.body.appendChild(menu);
+
+  function showChannelContextMenu(channelName, x, y) {
+    const isDM = isDMChannel(channelName);
+    let items = '';
+    if (!isDM) {
+      items += `<div class="ctx-item" role="menuitem" data-action="settings">Channel Settings</div>`;
+    }
+    if (channelName !== 'general') {
+      items += `<div class="ctx-item ctx-danger" role="menuitem" data-action="leave">Leave Channel</div>`;
+    }
+    if (!items) { menu.style.display = 'none'; return; }
+    menu.innerHTML = items;
+    menu.style.display = 'block';
+
+    const menuX = Math.min(x, window.innerWidth - 160);
+    const menuY = Math.min(y, window.innerHeight - menu.offsetHeight - 10);
+    menu.style.left = menuX + 'px';
+    menu.style.top = menuY + 'px';
+
+    menu.onclick = (ev) => {
+      const item = ev.target.closest('.ctx-item');
+      if (!item) return;
+      menu.style.display = 'none';
+      const action = item.getAttribute('data-action');
+      if (action === 'settings') {
+        if (state.currentChannel !== channelName) switchChannel(channelName);
+        openChannelSettings();
+      } else if (action === 'leave') {
+        if (!confirm(`Leave ${isDM ? 'DM' : '#' + channelName}?`)) return;
+        send('Leave', { channel: channelName });
+        if (state.currentChannel === channelName) switchChannel('general');
+      }
+    };
+  }
+
+  function getChannelName(el) {
+    const item = el.closest('.channel-item, .dm-item');
+    if (!item) return null;
+    const onclick = item.getAttribute('onclick') || '';
+    const match = onclick.match(/switchChannel\('([^']+)'\)/);
+    return match ? match[1] : null;
+  }
+
+  // Desktop: right-click on channel/DM list items
+  ['channel-list', 'dm-list'].forEach(id => {
+    const listEl = document.getElementById(id);
+    if (!listEl) return;
+    listEl.addEventListener('contextmenu', (e) => {
+      const name = getChannelName(e.target);
+      if (!name) return;
+      e.preventDefault();
+      showChannelContextMenu(name, e.clientX, e.clientY);
+    });
+  });
+
+  // Mobile: long-press on channel/DM list items
+  let chLongPressTimer = null;
+  let chLongPressFired = false;
+
+  ['channel-list', 'dm-list'].forEach(id => {
+    const listEl = document.getElementById(id);
+    if (!listEl) return;
+    listEl.addEventListener('touchstart', (e) => {
+      const name = getChannelName(e.target);
+      if (!name) return;
+      chLongPressFired = false;
+      const touch = e.touches[0];
+      const tx = touch.clientX, ty = touch.clientY;
+      chLongPressTimer = setTimeout(() => {
+        chLongPressFired = true;
+        showChannelContextMenu(name, tx, ty);
+      }, 500);
+    }, { passive: true });
+
+    listEl.addEventListener('touchmove', () => {
+      if (chLongPressTimer) { clearTimeout(chLongPressTimer); chLongPressTimer = null; }
+    }, { passive: true });
+
+    listEl.addEventListener('touchend', (e) => {
+      if (chLongPressTimer) { clearTimeout(chLongPressTimer); chLongPressTimer = null; }
+      if (chLongPressFired) { e.preventDefault(); chLongPressFired = false; }
+    });
+
+    listEl.addEventListener('touchcancel', () => {
+      if (chLongPressTimer) { clearTimeout(chLongPressTimer); chLongPressTimer = null; }
+      chLongPressFired = false;
+    });
+  });
+
+  // Keyboard: Shift+F10 or ContextMenu key on focused channel item
+  ['channel-list', 'dm-list'].forEach(id => {
+    const listEl = document.getElementById(id);
+    if (!listEl) return;
+    listEl.addEventListener('keydown', (e) => {
+      if (e.key === 'F10' && e.shiftKey || e.key === 'ContextMenu') {
+        const name = getChannelName(e.target);
+        if (!name) return;
+        e.preventDefault();
+        const rect = e.target.getBoundingClientRect();
+        showChannelContextMenu(name, rect.left + 20, rect.bottom);
+      }
+    });
+  });
+
+  // Dismiss
   document.addEventListener('click', (e) => {
     if (!menu.contains(e.target)) menu.style.display = 'none';
   });

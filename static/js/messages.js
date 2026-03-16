@@ -3,7 +3,7 @@
 import state, { isDMChannel, emit } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64, showRestorePrompt } from './crypto.js';
-import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM, refreshAllMessageActions } from './chat-ui.js';
+import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM, refreshAllMessageActions, initUserPFP, showE2EKeyPrompt } from './chat-ui.js';
 import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
@@ -11,6 +11,7 @@ import { switchView, renderTopicList, renderThread, appendTopicReply } from './t
 import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCreated, onUserRolesResponse } from './admin.js';
 import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
 import { handleSearchResults, handleSearchHistory } from './search.js';
+import { startTtlTicker, stopTtlTicker } from './ttl.js';
 import { routeWidgetBroadcast, routeWidgetServerResponse, clearUserPresence } from './widgets/widget-api.js';
 import { showNotification, renderNotificationSettings } from './notifications.js';
 import { isTauri, CLIENT_PROTOCOL_VERSION } from './config.js';
@@ -42,10 +43,12 @@ export function handleServerMsg(msg) {
         state.currentUser = msg.username;
         state.userRoles = msg.roles || [];
         state.isAdmin = state.userRoles.includes('admin');
+        if (msg.ice_servers) {
+          state.iceServers = msg.ice_servers;
+        }
         document.getElementById('auth-screen').style.display = 'none';
         document.getElementById('chat-screen').style.display = 'flex';
-        document.getElementById('display-user').textContent = state.currentUser;
-        document.getElementById('admin-gear-btn').style.display = state.isAdmin ? '' : 'none';
+        initUserPFP();
         // Show server name in sidebar header if set
         updateSidebarTitle();
         // If serverName isn't loaded yet (race with /api/server-info), fetch it now
@@ -53,6 +56,7 @@ export function handleServerMsg(msg) {
           window._checkServerInfo().then(() => updateSidebarTitle());
         }
         initE2E().then(() => updateKeyUI());
+        startTtlTicker();
         send('GetPreferences', {});
         // Rebuild hover action buttons now that currentUser/isAdmin are set
         refreshAllMessageActions();
@@ -65,6 +69,7 @@ export function handleServerMsg(msg) {
         }
       } else {
         document.getElementById('auth-error').textContent = msg.error || 'Auth failed';
+        stopTtlTicker();
         state.token = null;
         scopedRemove('token');
         document.getElementById('auth-screen').style.display = 'flex';
@@ -509,8 +514,15 @@ export function handleServerMsg(msg) {
       state.encryptedChannels.add(msg.channel);
       renderDMList();
       if (!state.e2eReady) {
-        switchChannel(msg.channel);
-        appendSystem('This is an encrypted DM. Generate or import an E2E key (bottom of sidebar) to participate.');
+        if (msg.initiated) {
+          const prevCh = state.currentChannel;
+          state._suppressE2EPrompt = true;
+          switchChannel(msg.channel);
+          showE2EKeyPrompt(() => switchChannel(prevCh || 'general'));
+        } else {
+          state.unreadCounts[msg.channel] = (state.unreadCounts[msg.channel] || 0) + 1;
+          renderDMList();
+        }
         break;
       }
       if (msg.initiated && state.e2eReady && !state.channelKeys[msg.channel]) {
@@ -537,7 +549,12 @@ export function handleServerMsg(msg) {
           }
         }, 2000);
       }
-      switchChannel(msg.channel);
+      if (msg.initiated) {
+        switchChannel(msg.channel);
+      } else {
+        state.unreadCounts[msg.channel] = (state.unreadCounts[msg.channel] || 0) + 1;
+        renderDMList();
+      }
       break;
 
     case 'DMList':
@@ -593,9 +610,24 @@ export function handleServerMsg(msg) {
       break;
 
     // ── Admin responses ──
-    case 'Settings':
-      renderAdminSettings(msg.settings);
+    case 'Settings': {
+      // Update branding state for all clients
+      const newName = msg.settings.find(s => s.key === 'server_name');
+      const newIcon = msg.settings.find(s => s.key === 'server_icon');
+      if (newName) {
+        state.serverName = newName.value || null;
+        updateSidebarTitle();
+        if (window._renderServerRail) window._renderServerRail();
+        if (window._updateAuthServerInfo) window._updateAuthServerInfo();
+      }
+      if (newIcon) {
+        state.serverIcon = newIcon.value || null;
+        if (window._renderServerRail) window._renderServerRail();
+      }
+      // Only render admin panel if the user is an admin
+      if (state.isAdmin) renderAdminSettings(msg.settings);
       break;
+    }
 
     case 'InviteCreated':
       onInviteCreated(msg.code);
@@ -639,6 +671,16 @@ export function handleServerMsg(msg) {
           renderProfileModal(msg.username);
         }
       }
+      // Refresh user settings profile tab if open for current user
+      if (msg.username === state.currentUser) {
+        const settingsOverlay = document.getElementById('user-settings-overlay');
+        const settingsTab = document.querySelector('#user-settings-tabs .active');
+        if (settingsOverlay && settingsOverlay.classList.contains('active') &&
+            settingsTab && settingsTab.textContent.toLowerCase() === 'profile') {
+          // Re-import to avoid storing _currentSettingsTab externally
+          import('./chat-ui.js').then(m => m.switchUserSettingsTab('profile', settingsTab));
+        }
+      }
       break;
 
     case 'UserProfiles':
@@ -655,6 +697,7 @@ export function handleServerMsg(msg) {
       // Refresh avatars in chat messages when avatar changes
       if (msg.field === 'avatar_id') {
         refreshAvatarsInDOM(msg.username);
+        if (msg.username === state.currentUser) initUserPFP();
       }
       // Refresh profile modal if open for this user
       {

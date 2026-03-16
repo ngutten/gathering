@@ -46,16 +46,27 @@ pub struct Hub {
     next_id: Mutex<usize>,
     pub(super) data_dir: PathBuf,
     pub(super) config: RwLock<ServerConfig>,
+    /// Shared secret for generating TURN credentials (None if TURN is disabled)
+    turn_secret: Option<String>,
+    /// Server's LAN IP for hairpin NAT workaround
+    lan_ip: Option<std::net::IpAddr>,
 }
 
 impl Hub {
-    pub fn new(db: Arc<Db>, data_dir: PathBuf, config: ServerConfig) -> Self {
+    pub fn new(db: Arc<Db>, data_dir: PathBuf, config: ServerConfig, turn_secret: Option<String>) -> Self {
+        let lan_ip = if turn_secret.is_some() {
+            crate::turn::detect_lan_ip()
+        } else {
+            None
+        };
         Hub {
             clients: Mutex::new(HashMap::new()),
             db,
             next_id: Mutex::new(0),
             data_dir,
             config: RwLock::new(config),
+            turn_secret,
+            lan_ip,
         }
     }
 
@@ -209,7 +220,18 @@ impl Hub {
                 }
 
                 let result = self.authenticate(id, &token).await;
-                let capabilities = build_capabilities(&self.config.read().unwrap_or_else(|e| e.into_inner()));
+                let config = self.config.read().unwrap_or_else(|e| e.into_inner()).clone();
+                let capabilities = build_capabilities(&config);
+
+                // Generate ICE servers if TURN is configured
+                let ice_servers = match (&config.public_address, &self.turn_secret) {
+                    (Some(ref addr), Some(ref secret)) => {
+                        let (username, credential) = crate::turn::generate_credentials(secret);
+                        Some(crate::turn::build_ice_servers(addr, config.turn_port, &username, &credential, self.lan_ip))
+                    }
+                    _ => None,
+                };
+
                 let clients = self.clients.lock().await;
                 if let Some(client) = clients.get(&id) {
                     let resp = match result {
@@ -222,6 +244,7 @@ impl Hub {
                                 roles: Some(roles),
                                 protocol_version: Some(PROTOCOL_VERSION),
                                 capabilities: Some(capabilities),
+                                ice_servers,
                             }
                         }
                         Err(ref e) => ServerMsg::AuthResult {
@@ -231,6 +254,7 @@ impl Hub {
                             roles: None,
                             protocol_version: Some(PROTOCOL_VERSION),
                             capabilities: None,
+                            ice_servers: None,
                         },
                     };
                     if let Err(e) = Self::send_to(&client.tx, &resp) {
@@ -506,15 +530,24 @@ impl Hub {
                     _ => return,
                 };
                 drop(clients);
-                // Validate preference keys
-                let valid_keys = ["notify_mention", "notify_channel_mention", "notify_server_mention"];
-                let valid_values = ["window", "system", "none"];
-                if !valid_keys.contains(&key.as_str()) {
-                    self.send_error(id, "Invalid preference key").await;
-                    return;
-                }
-                if !valid_values.contains(&value.as_str()) {
-                    self.send_error(id, "Invalid preference value (must be 'window', 'system', or 'none')").await;
+                // Validate preference keys and their allowed values
+                let valid = match key.as_str() {
+                    "notify_mention" | "notify_channel_mention" | "notify_server_mention" => {
+                        ["window", "system", "none"].contains(&value.as_str())
+                    }
+                    "notify_sound" => {
+                        ["on", "off"].contains(&value.as_str())
+                    }
+                    "allow_dms" => {
+                        ["everyone", "none"].contains(&value.as_str())
+                    }
+                    _ => {
+                        self.send_error(id, "Invalid preference key").await;
+                        return;
+                    }
+                };
+                if !valid {
+                    self.send_error(id, "Invalid preference value").await;
                     return;
                 }
                 self.db.set_user_preference(&username, &key, &value);

@@ -133,10 +133,9 @@
   /* Sidebar */
   .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border);
              display: flex; flex-direction: column; flex-shrink: 0; }
-  .sidebar-header { padding: 1rem; border-bottom: 1px solid var(--border);
-                     display: flex; align-items: center; justify-content: space-between; }
-  .sidebar-header-left h2 { font-size: 1rem; color: var(--accent); }
-  .sidebar-header-left .user-info { font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem; }
+  .sidebar-header { padding: 1rem; border-bottom: 1px solid var(--border); }
+  .sidebar-header h2 { font-size: 1rem; color: var(--accent);
+                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .admin-btn { background: none; border: 1px solid var(--border); border-radius: 4px;
                color: var(--text2); cursor: pointer; padding: 0.3rem 0.4rem; font-size: 0.85rem;
                line-height: 1; }
@@ -151,13 +150,38 @@
   .channel-item .count { font-size: 0.7rem; color: var(--text2); }
   .user-item { padding: 0.25rem 1rem; font-size: 0.8rem; color: var(--text2);
                display: flex; align-items: center; justify-content: space-between; }
-  .join-channel { padding: 0.5rem 1rem; }
-  .join-channel input { width: 100%; padding: 0.3rem 0.5rem; background: var(--bg);
-                       border: 1px solid var(--border); border-radius: 3px;
-                       color: var(--text); font-family: inherit; font-size: 0.8rem; }
-  .join-channel input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+  .sidebar-section-header { display: flex; align-items: center; justify-content: space-between;
+                            padding: 0.3rem 1rem; }
+  .sidebar-section-header h3 { padding: 0; }
+  .sidebar-add-btn { background: none; border: none; color: var(--text2); cursor: pointer;
+                     font-size: 0.9rem; line-height: 1; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  .sidebar-add-btn:hover, .sidebar-add-btn:focus-visible { color: var(--accent); background: var(--bg3); }
 
-  .sidebar-bottom { margin-top: auto; padding: 0.7rem 1rem; border-top: 1px solid var(--border);
+  .create-channel-form { display: flex; flex-direction: column; gap: 0.8rem; }
+  .create-channel-form input[type="text"] { width: 100%; padding: 0.5rem 0.7rem;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-family: inherit; font-size: 0.85rem; }
+  .create-channel-form input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
+    border-color: var(--accent); }
+  .create-channel-toggle { display: flex; align-items: center; justify-content: space-between;
+    padding: 0.4rem 0; font-size: 0.8rem; color: var(--text); }
+  .create-channel-toggle-desc { font-size: 0.7rem; color: var(--text2); margin-top: 0.1rem; }
+
+  /* ── User bar (sidebar bottom, Discord-style) ─── */
+  .user-pfp-menu-wrap { position: relative; }
+  .user-bar { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.4rem;
+              border-radius: 4px; cursor: pointer; }
+  .user-bar:hover, .user-bar:focus-visible { background: var(--bg3); }
+  .user-bar .user-avatar { flex-shrink: 0; }
+  .user-bar-name { font-size: 0.8rem; color: var(--text); font-weight: 600;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .user-pfp-dropdown { position: absolute; bottom: 100%; left: 0; z-index: 250; min-width: 180px;
+                       background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+                       box-shadow: 0 4px 12px rgba(0,0,0,0.4); margin-bottom: 0.3rem;
+                       padding: 0.25rem 0; overflow: hidden; }
+  .sidebar-e2e { margin-bottom: 0.4rem; }
+
+  .sidebar-bottom { margin-top: auto; padding: 0.5rem 0.6rem; border-top: 1px solid var(--border);
                    font-size: 0.7rem; color: var(--text2); }
 
   /* Main chat area */
@@ -167,11 +191,6 @@
   .chat-header h2 { font-size: 0.95rem; }
   .chat-header .typing { font-size: 0.75rem; color: var(--text2); font-style: italic; }
 
-  /* Channel header tool buttons (pin, settings) grouped after name */
-  .channel-header-tools { display: flex; gap: 0.15rem; margin-left: 0.3rem; flex-shrink: 0; }
-  .ch-tool-btn { background: none; border: none; color: var(--text2); cursor: pointer;
-                 padding: 0.15rem 0.3rem; font-size: 0.8rem; line-height: 1; border-radius: 3px; }
-  .ch-tool-btn:hover, .ch-tool-btn:focus-visible { color: var(--accent); background: var(--bg3); }
   .chat-header-right { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
 
   .messages { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; display: flex;
@@ -180,7 +199,12 @@
   .msg .meta { font-size: 0.75rem; }
   .msg .author { color: var(--accent); font-weight: 600; }
   .msg .time { color: var(--text2); margin-left: 0.4rem; font-size: 0.7rem; }
-  .msg .ttl { color: var(--orange); margin-left: 0.3rem; font-size: 0.65rem; }
+  .msg .ttl { color: var(--orange); margin-left: 0.3rem; font-size: 0.65rem; transition: color 0.3s; }
+  .ttl-urgent .ttl { color: var(--red); animation: ttl-pulse 1s ease-in-out infinite; }
+  @keyframes ttl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes msg-expire { 0% { opacity: 1; filter: blur(0); max-height: 200px; }
+    50% { opacity: 0.4; filter: blur(3px); } 100% { opacity: 0; filter: blur(6px); max-height: 0; padding: 0; margin: 0; overflow: hidden; } }
+  .msg-expiring { animation: msg-expire 0.8s ease-out forwards; pointer-events: none; }
   .msg .edited { color: var(--text2); font-size: 0.65rem; margin-left: 0.3rem; }
   .msg .body { margin-top: 0.1rem; font-size: 0.85rem; word-wrap: break-word; }
   .msg.system { color: var(--text2); font-style: italic; font-size: 0.8rem; }
@@ -519,6 +543,7 @@
                        border-bottom: 2px solid transparent; }
   .admin-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
   .admin-tab-content { flex: 1; overflow-y: auto; padding: 1rem; }
+  #user-settings-overlay .admin-panel { height: min(520px, 80vh); }
   .admin-field { margin-bottom: 1rem; }
   .admin-field label { display: block; font-size: 0.75rem; color: var(--text2); margin-bottom: 0.3rem; }
   .admin-field select, .admin-field input { width: 100%; padding: 0.4rem 0.6rem;
@@ -579,10 +604,6 @@
   .channel-item.no-e2e-key span:first-child, .dm-item.no-e2e-key .dm-name { color: var(--red); }
 
   /* ── File manager ─── */
-  .files-btn { width: calc(100% - 2rem); margin: 0.3rem 1rem; padding: 0.35rem 0.6rem;
-               background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
-               color: var(--text2); font-family: inherit; font-size: 0.75rem; cursor: pointer; }
-  .files-btn:hover, .files-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
   .quota-info { margin-bottom: 0.8rem; }
   .quota-label { font-size: 0.8rem; color: var(--text2); margin-bottom: 0.3rem; }
   .quota-bar { width: 100%; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
@@ -1041,7 +1062,6 @@
     .chat-header h2 { font-size: 0.85rem; white-space: nowrap; overflow: hidden;
                        text-overflow: ellipsis; max-width: 40vw; }
     .chat-header-right { gap: 0.3rem; }
-    .channel-header-tools { margin-left: 0; }
 
     /* View toggle: smaller on mobile */
     .view-toggle button { padding: 0.25rem 0.5rem; font-size: 0.7rem; }

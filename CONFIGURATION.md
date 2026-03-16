@@ -38,6 +38,8 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
   "registration_mode": "open",
   "channel_creation": "all",
   "enabled_widgets": null,
+  "public_address": null,
+  "turn_port": 3478,
   "default_roles": {
     "user": [
       "send_message",
@@ -146,6 +148,24 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
   "enabled_widgets": []
   ```
   All widgets disabled. The widget toolbar button is hidden.
+
+#### `public_address`
+
+- **Type:** string or null
+- **Default:** `null` (TURN disabled, voice works on LAN only)
+- **Admin panel:** not exposed (config.json only)
+- **Description:** Your server's public IP address or DDNS hostname (e.g. `"203.0.113.5"` or `"myserver.ddns.net"`). When set, Gathering starts an embedded STUN/TURN server so voice chat works across NAT boundaries (different networks). When `null`, no STUN/TURN is started and voice only works between users on the same local network.
+
+  **Router/firewall setup:** Forward these UDP ports to the server:
+  - Port `3478` (or custom `turn_port`) — STUN/TURN signaling
+  - Ports `49152–49252` — media relay
+
+#### `turn_port`
+
+- **Type:** integer
+- **Default:** `3478`
+- **Admin panel:** not exposed (config.json only)
+- **Description:** UDP port for the embedded STUN/TURN server. Only used when `public_address` is set. Must be forwarded on your router.
 
 #### `default_roles`
 

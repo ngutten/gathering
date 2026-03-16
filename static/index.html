@@ -25,9 +25,9 @@
     <div class="auth-server-info" id="auth-server-info"></div>
     <div class="auth-error" id="auth-error" role="alert" aria-live="polite"></div>
     <label for="username" class="sr-only">Username</label>
-    <input type="text" id="username" placeholder="username" autocomplete="username">
+    <input type="text" id="username" placeholder="username" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('password').focus()">
     <label for="password" class="sr-only">Password</label>
-    <input type="password" id="password" placeholder="password" autocomplete="current-password">
+    <input type="password" id="password" placeholder="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
     <label for="invite-code" class="sr-only">Invite code</label>
     <input type="text" id="invite-code" placeholder="invite code" style="display:none">
     <div class="auth-buttons">
@@ -43,29 +43,14 @@
     <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
     <nav class="sidebar" aria-label="Navigation">
       <div class="sidebar-header">
-        <div class="sidebar-header-left">
-          <h2>&#x2381; Gathering</h2>
-          <div class="user-info">logged in as <strong id="display-user" onclick="openProfile(this.textContent)" style="cursor:pointer;" title="View profile" role="button" tabindex="0"></strong></div>
-        </div>
-        <div style="display:flex;gap:0.3rem;align-items:center;">
-          <button class="admin-btn" id="admin-gear-btn" style="display:none" onclick="openAdminPanel()" title="Admin" aria-label="Admin settings">&#x2699;</button>
-          <button class="admin-btn" onclick="doLogout()" title="Logout" aria-label="Logout">&#x23FB;</button>
-        </div>
+        <h2>&#x2381; Gathering</h2>
       </div>
       <div class="sidebar-section">
-        <h3>Channels</h3>
-        <div id="channel-list"></div>
-        <div class="join-channel">
-          <div style="display:flex;gap:0.3rem;align-items:center;">
-            <input type="checkbox" id="encrypted-channel-check"
-                   style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer;flex-shrink:0;"
-                   title="Encrypted (E2E)"
-                   onchange="document.getElementById('e2e-hint').style.display=this.checked?'block':'none'">
-            <input type="text" id="new-channel" placeholder="join or create #channel"
-                   onkeydown="if(event.key==='Enter')joinChannel()" style="flex:1;min-width:0;">
-          </div>
-          <div id="e2e-hint" style="display:none;font-size:0.6rem;color:var(--text2);margin-top:0.15rem;">&#x1F512; E2E</div>
+        <div class="sidebar-section-header">
+          <h3>Channels</h3>
+          <button class="sidebar-add-btn" onclick="openCreateChannel('text')" title="New channel" aria-label="Create channel">+</button>
         </div>
+        <div id="channel-list"></div>
       </div>
       <div class="sidebar-section" id="dm-section">
         <h3>Direct Messages</h3>
@@ -76,14 +61,11 @@
         <div id="online-users"></div>
       </div>
       <div class="sidebar-section">
-        <h3>Voice Channels</h3>
-        <div id="voice-channel-list"></div>
-        <div class="join-channel">
-          <div style="display:flex;gap:0.3rem;align-items:center;">
-            <input type="text" id="new-voice-channel" placeholder="create voice channel"
-                   onkeydown="if(event.key==='Enter')createVoiceChannel()" style="flex:1;min-width:0;">
-          </div>
+        <div class="sidebar-section-header">
+          <h3>Voice Channels</h3>
+          <button class="sidebar-add-btn" onclick="openCreateChannel('voice')" title="New voice channel" aria-label="Create voice channel">+</button>
         </div>
+        <div id="voice-channel-list"></div>
       </div>
       <div class="voice-section" id="voice-section" style="display:none;">
         <h3>Voice</h3>
@@ -96,23 +78,20 @@
         <button class="voice-btn voice-join" id="voice-join-btn" onclick="joinVoice()" style="display:none;">Join Voice</button>
         <button class="voice-btn voice-leave" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
       </div>
-      <div class="sidebar-section" style="border-top:1px solid var(--border);padding-top:0.3rem;">
-        <button class="files-btn" onclick="openFileManager()" aria-label="Open file manager">Files</button>
-        <button class="files-btn" onclick="openUserSettings()" aria-label="Open user settings">Settings</button>
-      </div>
       <div class="sidebar-bottom">
-        <div style="margin-bottom:0.3rem;">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code><span id="no-key-label" style="font-size:0.65rem;color:var(--red);">No key set</span></div>
-        <div id="e2e-has-key" style="display:none;">
-          <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
-            <button onclick="exportPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Export Key</button>
-            <button onclick="importPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Import Key</button>
-            <button onclick="setupKeySync()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;" aria-label="Sync key across devices">Sync</button>
+        <div class="sidebar-e2e">E2E: <code id="key-fingerprint" style="font-size:0.65rem;color:var(--green);"></code><span id="no-key-label" style="font-size:0.65rem;color:var(--red);">No key set</span></div>
+        <div class="user-pfp-menu-wrap">
+          <div class="user-bar" id="user-pfp-btn" onclick="toggleUserMenu()" role="button" tabindex="0" aria-haspopup="true" aria-expanded="false" title="User menu" aria-label="User menu"
+               onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleUserMenu();}">
+            <span id="user-pfp-avatar"></span>
+            <span class="user-bar-name" id="user-bar-name"></span>
           </div>
-        </div>
-        <div id="e2e-no-key">
-          <div style="display:flex;gap:0.3rem;">
-            <button onclick="generateNewE2EKey()" style="padding:0.15rem 0.4rem;background:var(--green);color:#000;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:0.65rem;">Generate Key</button>
-            <button onclick="importPrivateKey()" style="padding:0.15rem 0.4rem;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text2);cursor:pointer;font-family:inherit;font-size:0.65rem;">Import Key</button>
+          <div class="user-pfp-dropdown" id="user-pfp-dropdown" role="menu" style="display:none;">
+            <div class="ctx-item" role="menuitem" tabindex="-1" onclick="closeUserMenu();openProfile(window._gatheringState.currentUser)">View Profile</div>
+            <div class="ctx-item" role="menuitem" tabindex="-1" onclick="closeUserMenu();openUserSettings()">Settings</div>
+            <div class="ctx-item" role="menuitem" tabindex="-1" id="pfp-admin-item" style="display:none" onclick="closeUserMenu();openAdminPanel()">Admin Panel</div>
+            <div style="border-top:1px solid var(--border);margin:0.2rem 0;"></div>
+            <div class="ctx-item ctx-danger" role="menuitem" tabindex="-1" onclick="closeUserMenu();doLogout()">&#x1F6AA; Logout</div>
           </div>
         </div>
       </div>
@@ -121,16 +100,12 @@
       <div class="chat-header">
         <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle sidebar">&#x2630;</button>
         <h2 id="chat-channel-name">#general</h2>
-        <div class="channel-header-tools">
-          <button class="ch-tool-btn" onclick="togglePinnedBanner()" title="Pinned Messages" aria-label="Pinned messages">&#x1F4CC;</button>
-          <button class="ch-tool-btn" onclick="openChannelSettings()" title="Channel Settings" aria-label="Channel settings">&#x2699;</button>
-        </div>
         <span class="typing" id="typing-indicator" aria-live="polite"></span>
         <button class="request-key-btn" id="request-key-btn" onclick="requestChannelKey()" style="display:none;" title="Request encryption key for this channel">Request Key</button>
         <div class="chat-header-right">
           <button class="search-toggle-btn" onclick="toggleSearch()" title="Search" aria-label="Search messages">&#x1F50D;</button>
           <div style="position:relative;">
-            <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets" aria-label="Widgets">&#x29C8;</button>
+            <button class="search-toggle-btn" id="widget-toolbar-btn" onclick="toggleWidgetPicker()" title="Widgets" aria-label="Widgets">&#x1F4E6;</button>
             <div class="widget-picker" id="widget-picker" style="display:none;"></div>
           </div>
           <div class="view-toggle">
@@ -282,19 +257,6 @@
   </div>
 </div>
 
-<!-- File Manager Overlay -->
-<div class="admin-overlay" id="files-overlay" onclick="if(event.target===this)closeFileManager()" role="dialog" aria-modal="true" aria-labelledby="files-overlay-title">
-  <div class="admin-panel">
-    <div class="admin-panel-header">
-      <h2 id="files-overlay-title">File Manager</h2>
-      <button class="admin-panel-close" onclick="closeFileManager()" aria-label="Close">&times;</button>
-    </div>
-    <div class="admin-tab-content" id="files-content">
-      <div style="color:var(--text2);font-size:0.8rem;">Loading files...</div>
-    </div>
-  </div>
-</div>
-
 <!-- Pinned Messages Overlay -->
 <div class="admin-overlay" id="pinned-messages-overlay" onclick="if(event.target===this)closePinnedPanel()" role="dialog" aria-modal="true" aria-labelledby="pinned-overlay-title">
   <div class="admin-panel">
@@ -353,12 +315,30 @@
 
 <!-- User Settings Overlay -->
 <div class="admin-overlay" id="user-settings-overlay" onclick="if(event.target===this)closeUserSettings()" role="dialog" aria-modal="true" aria-labelledby="user-settings-title">
-  <div class="admin-panel" style="width:440px;">
+  <div class="admin-panel" style="width:480px;">
     <div class="admin-panel-header">
       <h2 id="user-settings-title">Settings</h2>
       <button class="admin-panel-close" onclick="closeUserSettings()" aria-label="Close">&times;</button>
     </div>
+    <div class="admin-tabs" id="user-settings-tabs">
+      <button class="active" onclick="switchUserSettingsTab('profile',this)">Profile</button>
+      <button onclick="switchUserSettingsTab('notifications',this)">Notifications</button>
+      <button onclick="switchUserSettingsTab('files',this)">Files</button>
+      <button onclick="switchUserSettingsTab('encryption',this)">Encryption</button>
+    </div>
     <div class="admin-tab-content" id="user-settings-content">
+    </div>
+  </div>
+</div>
+
+<!-- Create Channel Overlay -->
+<div class="admin-overlay" id="create-channel-overlay" onclick="if(event.target===this)closeCreateChannel()" role="dialog" aria-modal="true" aria-labelledby="create-channel-title">
+  <div class="admin-panel" style="width:380px;">
+    <div class="admin-panel-header">
+      <h2 id="create-channel-title">Create Channel</h2>
+      <button class="admin-panel-close" onclick="closeCreateChannel()" aria-label="Close">&times;</button>
+    </div>
+    <div class="admin-tab-content" id="create-channel-content">
     </div>
   </div>
 </div>
