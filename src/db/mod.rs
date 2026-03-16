@@ -169,7 +169,11 @@ impl Db {
             INSERT OR IGNORE INTO settings(key, value) VALUES ('channel_creation', 'all');
 
             -- Ensure 'general' channel exists
-            INSERT OR IGNORE INTO channels(name) VALUES ('general');",
+            INSERT OR IGNORE INTO channels(name) VALUES ('general');
+
+            -- System users (impossible password hash — can never be logged into)
+            INSERT OR IGNORE INTO users(username, password_hash) VALUES ('[Anonymous]', '!locked');
+            INSERT OR IGNORE INTO users(username, password_hash) VALUES ('[deleted]', '!locked');",
         )?;
 
         // Column migrations for existing databases

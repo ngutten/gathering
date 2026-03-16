@@ -111,7 +111,7 @@ impl Hub {
 
         let msg = ServerMsg::message(&channel, &display_author, &content, expires_at, file_infos, encrypted, reply_to.clone(), mentions_opt.clone());
 
-        // Store in database (use display_author so anonymous is preserved in DB)
+        // Store in database (anonymous channels use [Anonymous] system user)
         if let ServerMsg::Message {
             ref id, ref timestamp, ref expires_at, ..
         } = msg

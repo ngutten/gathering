@@ -6,8 +6,14 @@ use uuid::Uuid;
 
 use super::Db;
 
+/// System users that cannot be registered or logged into.
+pub const SYSTEM_USERS: &[&str] = &["[Anonymous]", "[deleted]"];
+
 impl Db {
     pub fn register(&self, username: &str, password: &str) -> Result<(), String> {
+        if SYSTEM_USERS.contains(&username) {
+            return Err("Username is reserved".into());
+        }
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let exists: bool = conn
@@ -94,7 +100,7 @@ impl Db {
     pub fn list_users(&self) -> Vec<(String, String)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
-            "SELECT username, created_at FROM users ORDER BY username"
+            "SELECT username, created_at FROM users WHERE password_hash != '!locked' ORDER BY username"
         ) {
             Ok(s) => s,
             Err(e) => { eprintln!("[db::auth] list_users prepare failed: {e}"); return Vec::new(); }
@@ -107,14 +113,10 @@ impl Db {
     }
 
     pub fn delete_user(&self, username: &str, purge: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        // Save current FK state and disable — reassigning messages to "[deleted]"
-        // violates the FK on messages.author since "[deleted]" is not a real user.
-        // Must be set outside the transaction (PRAGMA foreign_keys is a no-op inside one).
-        let fk_was_on: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).unwrap_or(false);
-        if fk_was_on {
-            conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| e.to_string())?;
+        if SYSTEM_USERS.contains(&username) {
+            return Err("Cannot delete system user".into());
         }
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
         let result = (|| -> Result<(), String> {
             // Check user exists
@@ -151,7 +153,7 @@ impl Db {
                 conn.execute("DELETE FROM topics WHERE author = ?1", params![username]).map_err(|e| e.to_string())?;
                 conn.execute("DELETE FROM messages WHERE author = ?1", params![username]).map_err(|e| e.to_string())?;
             } else {
-                // Reassign orphaned content to "[deleted]" so the FK on users can be dropped
+                // Reassign orphaned content to [deleted] system user
                 conn.execute("UPDATE messages SET author = '[deleted]' WHERE author = ?1", params![username]).map_err(|e| e.to_string())?;
                 conn.execute("UPDATE topics SET author = '[deleted]' WHERE author = ?1", params![username]).map_err(|e| e.to_string())?;
                 conn.execute("UPDATE topic_replies SET author = '[deleted]' WHERE author = ?1", params![username]).map_err(|e| e.to_string())?;
@@ -164,9 +166,6 @@ impl Db {
             conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
         } else {
             let _ = conn.execute_batch("ROLLBACK");
-        }
-        if fk_was_on {
-            let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
         }
         result
     }
