@@ -648,16 +648,15 @@ export function handleServerMsg(msg) {
     // ── Admin responses ──
     case 'Settings': {
       // Update branding state for all clients
-      const newName = msg.settings.find(s => s.key === 'server_name');
-      const newIcon = msg.settings.find(s => s.key === 'server_icon');
-      if (newName) {
-        state.serverName = newName.value || null;
+      const settings = msg.settings || {};
+      if (settings.server_name !== undefined) {
+        state.serverName = settings.server_name || null;
         updateSidebarTitle();
         if (window._renderServerRail) window._renderServerRail();
         if (window._updateAuthServerInfo) window._updateAuthServerInfo();
       }
-      if (newIcon) {
-        state.serverIcon = newIcon.value || null;
+      if (settings.server_icon !== undefined) {
+        state.serverIcon = settings.server_icon || null;
         if (window._renderServerRail) window._renderServerRail();
       }
       // Only render admin panel if the user is an admin
