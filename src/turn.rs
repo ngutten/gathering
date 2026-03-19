@@ -46,20 +46,13 @@ pub fn sanitize_public_address(raw: &str) -> String {
 /// Start the embedded TURN server on the given UDP port.
 ///
 /// `public_address` is the externally-visible IP/hostname.
-/// `lan_ip` is the server's LAN address, used as the relay address when the
-/// server is behind NAT. This avoids the hairpin NAT problem: relay sockets
-/// send to each other via the LAN/loopback instead of trying to route through
-/// the public IP (which the server can't reach from inside the NAT).
-///
-/// Clients still connect to the TURN server via the public IP (NAT-forwarded),
-/// but relay candidates advertise the LAN IP. Since all relay traffic flows
-/// through the TURN server's control connection anyway, peers never need to
-/// reach relay ports directly.
+/// Relay candidates advertise the resolved public IP so that external peers
+/// can route to them.  LAN clients use host candidates for direct connectivity
+/// and fall back to the LAN ICE server entries if needed.
 pub async fn start_turn_server(
     public_address: &str,
     turn_port: u16,
     shared_secret: &str,
-    lan_ip: Option<IpAddr>,
     relay_port_min: u16,
     relay_port_max: u16,
 ) -> Result<Server, Box<dyn std::error::Error + Send + Sync>> {
@@ -74,9 +67,12 @@ pub async fn start_turn_server(
         addr.ip()
     };
 
-    // Use LAN IP for relay address if available (behind-NAT scenario).
-    // If the server has a real public IP, lan_ip will be None and we use public_ip directly.
-    let relay_ip = lan_ip.unwrap_or(public_ip);
+    // Always use public_ip as the relay address so that relay candidates contain
+    // a routable address for external clients.  LAN clients rarely need TURN
+    // (host candidates work) and can fall back to the LAN ICE server entries.
+    // Using the LAN IP here would produce relay candidates like 192.168.x.x
+    // that external peers cannot reach.
+    let relay_ip = public_ip;
 
     let conn = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", turn_port)).await?);
 

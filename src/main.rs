@@ -150,7 +150,6 @@ async fn main() {
             config.public_address.as_ref().unwrap(),
             config.turn_port,
             &secret,
-            lan_ip,
             config.relay_port_min,
             config.relay_port_max,
         )
@@ -165,7 +164,7 @@ async fn main() {
                 );
                 if let Some(lip) = lan_ip {
                     tracing::info!(
-                        "Detected LAN IP {} — relay address set to LAN IP (hairpin NAT workaround)",
+                        "Detected LAN IP {} — LAN ICE entries will be included for hairpin NAT workaround",
                         lip
                     );
                 }
