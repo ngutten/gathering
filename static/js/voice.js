@@ -279,6 +279,7 @@ export function createPeerConnection(targetUser, isInitiator) {
   if (typeof RTCPeerConnection === 'undefined') return null;
 
   console.log(`[voice] createPeerConnection(${targetUser}, initiator=${isInitiator})`, state.peerConnections[targetUser] ? 'REPLACING existing PC' : 'new');
+  console.log(`[voice] ICE servers:`, JSON.stringify(state.iceServers || []));
   if (state.peerConnections[targetUser]) console.trace('[voice] PC replacement trace');
 
   // Close existing connection if any
@@ -330,6 +331,22 @@ export function createPeerConnection(targetUser, isInitiator) {
             }
           });
         }).catch(() => {});
+        // Check audio flow after 2 seconds of being connected
+        setTimeout(() => {
+          if (state.peerConnections[targetUser] !== pc) return;
+          pc.getStats().then(stats => {
+            let audioIn = null, audioOut = null;
+            stats.forEach(report => {
+              if (report.type === 'inbound-rtp' && report.kind === 'audio') audioIn = report;
+              if (report.type === 'outbound-rtp' && report.kind === 'audio') audioOut = report;
+            });
+            if (audioIn) console.log(`[voice] Audio IN from ${targetUser}: bytes=${audioIn.bytesReceived}, packets=${audioIn.packetsReceived}`);
+            if (audioOut) console.log(`[voice] Audio OUT to ${targetUser}: bytes=${audioOut.bytesSent}, packets=${audioOut.packetsSent}`);
+            if (audioIn && audioIn.bytesReceived === 0) {
+              console.warn(`[voice] WARNING: ICE connected to ${targetUser} but 0 audio bytes received — remote may not be sending audio`);
+            }
+          }).catch(() => {});
+        }, 2000);
       }
     } else if (iceState === 'checking') {
       emit('system-message', `Connecting to ${targetUser}...`);
@@ -367,24 +384,33 @@ export function createPeerConnection(targetUser, isInitiator) {
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
+      console.log(`[voice] Local ICE candidate for ${targetUser}: ${e.candidate.type} ${e.candidate.protocol} ${e.candidate.address}:${e.candidate.port}`);
       send('VoiceSignal', {
         target_user: targetUser,
         signal_data: { type: 'ice-candidate', candidate: e.candidate }
       });
+    } else {
+      console.log(`[voice] ICE gathering complete for ${targetUser} (iceGatheringState=${pc.iceGatheringState})`);
     }
   };
 
   pc.onnegotiationneeded = async () => {
+    console.log(`[voice] onnegotiationneeded for ${targetUser} (handlingOffer=${pc._handlingOffer}, suppress=${pc._suppressNegotiation}, signalingState=${pc.signalingState})`);
     if (pc._handlingOffer || pc._suppressNegotiation) return;
     try {
       pc._makingOffer = true;
       const offer = await pc.createOffer();
-      if (pc.signalingState !== 'stable') return;
+      if (pc.signalingState !== 'stable') {
+        console.log(`[voice] onnegotiationneeded: signalingState changed to ${pc.signalingState}, aborting`);
+        return;
+      }
       await pc.setLocalDescription(offer);
+      console.log(`[voice] setLocalDescription(offer) done for ${targetUser}, signalingState=${pc.signalingState}, iceGatheringState=${pc.iceGatheringState}`);
       send('VoiceSignal', {
         target_user: targetUser,
         signal_data: { type: 'offer', sdp: pc.localDescription }
       });
+      console.log(`[voice] Sent offer to ${targetUser}`);
     } catch (err) {
       console.error('onnegotiationneeded error:', err);
     } finally {
@@ -403,20 +429,10 @@ export function createPeerConnection(targetUser, isInitiator) {
         console.error(`[voice] No stream for audio track from ${targetUser}`);
         return;
       }
-      const audioCtx = getVoiceAudioContext();
-      console.log(`[voice] AudioContext state: ${audioCtx.state}`);
-
-      // Route through GainNode for per-user volume control
-      const source = audioCtx.createMediaStreamSource(stream);
-      const gainNode = audioCtx.createGain();
+      // Play remote audio directly via <audio> element.
+      // (Routing through Web Audio MediaStreamDestination can produce silence
+      // in Chrome when the source is a remote WebRTC stream.)
       const vol = state.userVolumes[targetUser] ?? 1.0;
-      gainNode.gain.value = vol;
-      state.userGainNodes[targetUser] = gainNode;
-
-      // Create a destination stream that includes the gain-adjusted audio
-      const dest = audioCtx.createMediaStreamDestination();
-      source.connect(gainNode);
-      gainNode.connect(dest);
 
       let audio = document.getElementById('audio-' + targetUser);
       if (!audio) {
@@ -426,11 +442,13 @@ export function createPeerConnection(targetUser, isInitiator) {
         audio.autoplay = true;
         document.body.appendChild(audio);
       }
-      audio.srcObject = dest.stream;
+      audio.srcObject = stream;
       audio.volume = vol;
       if (state.isDeafened) audio.muted = true;
-      // Explicit play() — autoplay may be blocked outside user gesture context
       audio.play().catch(err => console.warn(`[voice] audio.play() blocked for ${targetUser}:`, err));
+
+      // Store a reference so per-user volume still works via audio.volume
+      state.userGainNodes[targetUser] = { _audioEl: audio };
       startRemoteSpeakingDetection(targetUser, stream);
 
       // Monitor track unmute (tracks often start muted until media flows)
@@ -490,7 +508,9 @@ export function createPeerConnection(targetUser, isInitiator) {
   // Fallback in case it doesn't (some browsers).
   if (isInitiator) {
     setTimeout(async () => {
+      console.log(`[voice] Initiator fallback check for ${targetUser}: signalingState=${pc.signalingState}, makingOffer=${pc._makingOffer}, hasRemoteDesc=${!!pc.remoteDescription}`);
       if (pc.signalingState === 'stable' && !pc._makingOffer && !pc.remoteDescription) {
+        console.log(`[voice] Initiator fallback: sending offer to ${targetUser} (onnegotiationneeded may not have fired)`);
         try {
           pc._makingOffer = true;
           const offer = await pc.createOffer();
@@ -507,6 +527,33 @@ export function createPeerConnection(targetUser, isInitiator) {
         }
       }
     }, 200);
+
+    // ICE watchdog: if after 5s ICE hasn't left 'new', something went wrong
+    setTimeout(() => {
+      if (state.peerConnections[targetUser] !== pc) return; // PC was replaced
+      if (pc.iceConnectionState === 'new' && pc.connectionState === 'new') {
+        console.warn(`[voice] ICE WATCHDOG: PC to ${targetUser} still in 'new' state after 5s!`);
+        console.warn(`[voice]   signalingState=${pc.signalingState}, iceGatheringState=${pc.iceGatheringState}`);
+        console.warn(`[voice]   localDescription=${pc.localDescription ? pc.localDescription.type : 'null'}, remoteDescription=${pc.remoteDescription ? pc.remoteDescription.type : 'null'}`);
+        if (!pc.localDescription) {
+          console.warn('[voice]   NO local description — offer was never set. Trying now...');
+          pc._makingOffer = true;
+          pc.createOffer().then(offer => {
+            if (pc.signalingState !== 'stable') return;
+            return pc.setLocalDescription(offer);
+          }).then(() => {
+            if (pc.localDescription) {
+              send('VoiceSignal', {
+                target_user: targetUser,
+                signal_data: { type: 'offer', sdp: pc.localDescription }
+              });
+              console.log(`[voice]   Watchdog sent offer to ${targetUser}`);
+            }
+          }).catch(err => console.error('[voice] Watchdog offer error:', err))
+            .finally(() => { pc._makingOffer = false; });
+        }
+      }
+    }, 5000);
   }
 
   return pc;
@@ -544,12 +591,14 @@ async function _handleVoiceSignal(fromUser, signalData) {
 
     try {
       pc._handlingOffer = true;
-      console.log(`[voice] Handling offer from ${fromUser} (new PC: ${isNewPc})`);
+      console.log(`[voice] Handling offer from ${fromUser} (new PC: ${isNewPc}, signalingState=${pc.signalingState})`);
 
       // Polite: rollback if needed (setRemoteDescription handles this in modern browsers)
       await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
+      console.log(`[voice] setRemoteDescription(offer) done from ${fromUser}, signalingState=${pc.signalingState}`);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      console.log(`[voice] setLocalDescription(answer) done for ${fromUser}, iceGatheringState=${pc.iceGatheringState}`);
       send('VoiceSignal', {
         target_user: fromUser,
         signal_data: { type: 'answer', sdp: pc.localDescription }
@@ -580,8 +629,9 @@ async function _handleVoiceSignal(fromUser, signalData) {
         console.log(`[voice] Ignoring stale answer from ${fromUser} (state: ${pc.signalingState})`);
       } else {
         try {
-          console.log(`[voice] Received answer from ${fromUser}`);
+          console.log(`[voice] Received answer from ${fromUser}, applying...`);
           await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
+          console.log(`[voice] setRemoteDescription(answer) done for ${fromUser}: signalingState=${pc.signalingState}, iceConnectionState=${pc.iceConnectionState}, iceGatheringState=${pc.iceGatheringState}, connectionState=${pc.connectionState}`);
         } catch (err) {
           console.error('Error setting answer from', fromUser, err);
         }
@@ -592,12 +642,17 @@ async function _handleVoiceSignal(fromUser, signalData) {
   } else if (signalData.type === 'ice-candidate') {
     const pc = state.peerConnections[fromUser];
     if (pc) {
+      const c = signalData.candidate;
+      // Parse candidate string for logging (JSON-serialized candidates lack high-level properties)
+      const candStr = c.candidate || '';
+      console.log(`[voice] Remote ICE candidate from ${fromUser}: ${candStr.substring(0, 80)} (signalingState=${pc.signalingState}, remoteDescription=${!!pc.remoteDescription})`);
       try {
-        await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+        await pc.addIceCandidate(new RTCIceCandidate(c));
       } catch (err) {
-        // Ignore ICE errors during rollback
-        if (!pc._polite) console.error('ICE candidate error:', err);
+        console.warn(`[voice] ICE candidate error from ${fromUser}:`, err.message);
       }
+    } else {
+      console.warn(`[voice] Received ICE candidate from ${fromUser} but no PeerConnection exists — candidate dropped`);
     }
   }
 }
@@ -759,10 +814,6 @@ export function renderVoiceMembers() {
 
 export function setUserVolume(user, vol) {
   state.userVolumes[user] = vol;
-  // Update GainNode if exists
-  const gainNode = state.userGainNodes[user];
-  if (gainNode) gainNode.gain.value = vol;
-  // Also update audio element volume as fallback
   const audio = document.getElementById('audio-' + user);
   if (audio) audio.volume = vol;
 }

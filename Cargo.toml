@@ -37,3 +37,4 @@ rcgen = "0.11"
 regex = "1"
 turn = "0.17"
 webrtc-util = { version = "0.17", features = ["conn", "vnet"] }
+async-trait = "0.1"

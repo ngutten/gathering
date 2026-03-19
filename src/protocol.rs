@@ -608,6 +608,12 @@ pub struct ServerConfig {
     /// Maximum UDP port for TURN relay allocations. Default 49252.
     #[serde(default = "ServerConfig::default_relay_port_max")]
     pub relay_port_max: u16,
+    /// Optional additional UDP port for TURN (e.g. 443 for mobile carrier compat).
+    #[serde(default)]
+    pub turn_port_alt: Option<u16>,
+    /// Optional TCP port for TURN-over-TCP (for restrictive firewalls blocking all UDP).
+    #[serde(default)]
+    pub turn_tcp_port: Option<u16>,
 }
 
 /// Deserialize a value that could be a JSON string, number, or null into Option<String>.
@@ -688,6 +694,8 @@ impl Default for ServerConfig {
             turn_port: Self::default_turn_port(),
             relay_port_min: Self::default_relay_port_min(),
             relay_port_max: Self::default_relay_port_max(),
+            turn_port_alt: None,
+            turn_tcp_port: None,
         }
     }
 }

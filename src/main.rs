@@ -149,6 +149,8 @@ async fn main() {
         match turn::start_turn_server(
             config.public_address.as_ref().unwrap(),
             config.turn_port,
+            config.turn_port_alt,
+            config.turn_tcp_port,
             &secret,
             config.relay_port_min,
             config.relay_port_max,
@@ -162,6 +164,12 @@ async fn main() {
                     config.relay_port_min, config.relay_port_max,
                     config.public_address.as_ref().unwrap()
                 );
+                if let Some(alt) = config.turn_port_alt {
+                    tracing::info!("TURN alt UDP port {} (mobile carrier compat)", alt);
+                }
+                if let Some(tcp) = config.turn_tcp_port {
+                    tracing::info!("TURN TCP port {} (restrictive firewall compat)", tcp);
+                }
                 if let Some(lip) = lan_ip {
                     tracing::info!(
                         "Detected LAN IP {} — LAN ICE entries will be included for hairpin NAT workaround",

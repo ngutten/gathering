@@ -22,7 +22,9 @@
       "Bash(echo FAILED:*)",
       "Bash(gh api:*)",
       "Bash(curl:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(node:*)",
+      "Bash(cargo doc:*)"
     ]
   }
 }

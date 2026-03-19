@@ -227,7 +227,7 @@ impl Hub {
                 let ice_servers = match (&config.public_address, &self.turn_secret) {
                     (Some(ref addr), Some(ref secret)) => {
                         let (username, credential) = crate::turn::generate_credentials(secret);
-                        Some(crate::turn::build_ice_servers(addr, config.turn_port, &username, &credential, self.lan_ip))
+                        Some(crate::turn::build_ice_servers(addr, config.turn_port, config.turn_port_alt, config.turn_tcp_port, &username, &credential, self.lan_ip))
                     }
                     _ => None,
                 };
