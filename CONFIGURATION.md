@@ -40,6 +40,8 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
   "enabled_widgets": null,
   "public_address": null,
   "turn_port": 3478,
+  "relay_port_min": 49152,
+  "relay_port_max": 49252,
   "default_roles": {
     "user": [
       "send_message",
@@ -158,7 +160,7 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
 
   **Router/firewall setup:** Forward these UDP ports to the server:
   - Port `3478` (or custom `turn_port`) — STUN/TURN signaling
-  - Ports `49152–49252` — media relay
+  - Ports `49152–49252` (or custom `relay_port_min`–`relay_port_max`) — media relay
 
 #### `turn_port`
 
@@ -166,6 +168,20 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
 - **Default:** `3478`
 - **Admin panel:** not exposed (config.json only)
 - **Description:** UDP port for the embedded STUN/TURN server. Only used when `public_address` is set. Must be forwarded on your router.
+
+#### `relay_port_min`
+
+- **Type:** integer
+- **Default:** `49152`
+- **Admin panel:** not exposed (config.json only)
+- **Description:** Minimum UDP port for TURN media relay allocations. Only used when `public_address` is set. The range `relay_port_min`–`relay_port_max` must be forwarded on your router.
+
+#### `relay_port_max`
+
+- **Type:** integer
+- **Default:** `49252`
+- **Admin panel:** not exposed (config.json only)
+- **Description:** Maximum UDP port for TURN media relay allocations. Only used when `public_address` is set.
 
 #### `default_roles`
 

@@ -14,9 +14,34 @@ use webrtc_util::vnet::net::Net;
 use crate::protocol::IceServer;
 
 const TURN_REALM: &str = "gathering";
-const RELAY_MIN_PORT: u16 = 49152;
-const RELAY_MAX_PORT: u16 = 49252;
+pub const DEFAULT_RELAY_MIN_PORT: u16 = 49152;
+pub const DEFAULT_RELAY_MAX_PORT: u16 = 49252;
 const CREDENTIAL_TTL_SECS: u64 = 86400; // 24 hours
+
+/// Strip scheme (e.g. "https://") and port (e.g. ":9123") from a public_address
+/// value, in case the user pastes a full URL instead of just a hostname/IP.
+pub fn sanitize_public_address(raw: &str) -> String {
+    let mut s = raw.trim();
+    // Strip scheme
+    if let Some(rest) = s.strip_prefix("https://") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("http://") {
+        s = rest;
+    }
+    // Strip trailing path
+    if let Some(idx) = s.find('/') {
+        s = &s[..idx];
+    }
+    // Strip port suffix (but not if it's an IPv6 address like [::1]:3478)
+    if !s.starts_with('[') {
+        if let Some(idx) = s.rfind(':') {
+            if s[idx + 1..].chars().all(|c| c.is_ascii_digit()) {
+                s = &s[..idx];
+            }
+        }
+    }
+    s.to_string()
+}
 
 /// Start the embedded TURN server on the given UDP port.
 ///
@@ -35,6 +60,8 @@ pub async fn start_turn_server(
     turn_port: u16,
     shared_secret: &str,
     lan_ip: Option<IpAddr>,
+    relay_port_min: u16,
+    relay_port_max: u16,
 ) -> Result<Server, Box<dyn std::error::Error + Send + Sync>> {
     // Resolve public_address to IP
     let public_ip: IpAddr = if let Ok(ip) = public_address.parse::<IpAddr>() {
@@ -58,8 +85,8 @@ pub async fn start_turn_server(
             conn,
             relay_addr_generator: Box::new(RelayAddressGeneratorRanges {
                 relay_address: relay_ip,
-                min_port: RELAY_MIN_PORT,
-                max_port: RELAY_MAX_PORT,
+                min_port: relay_port_min,
+                max_port: relay_port_max,
                 max_retries: 10,
                 address: "0.0.0.0".to_owned(),
                 net: Arc::new(Net::new(None)),

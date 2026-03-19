@@ -602,6 +602,12 @@ pub struct ServerConfig {
     /// UDP port for embedded STUN/TURN server. Default 3478.
     #[serde(default = "ServerConfig::default_turn_port")]
     pub turn_port: u16,
+    /// Minimum UDP port for TURN relay allocations. Default 49152.
+    #[serde(default = "ServerConfig::default_relay_port_min")]
+    pub relay_port_min: u16,
+    /// Maximum UDP port for TURN relay allocations. Default 49252.
+    #[serde(default = "ServerConfig::default_relay_port_max")]
+    pub relay_port_max: u16,
 }
 
 /// Deserialize a value that could be a JSON string, number, or null into Option<String>.
@@ -649,6 +655,8 @@ impl ServerConfig {
     fn default_registration_mode() -> String { "open".to_string() }
     fn default_channel_creation() -> String { "all".to_string() }
     fn default_turn_port() -> u16 { 3478 }
+    fn default_relay_port_min() -> u16 { 49152 }
+    fn default_relay_port_max() -> u16 { 49252 }
 }
 
 impl Default for ServerConfig {
@@ -678,6 +686,8 @@ impl Default for ServerConfig {
             enabled_widgets: None,
             public_address: None,
             turn_port: Self::default_turn_port(),
+            relay_port_min: Self::default_relay_port_min(),
+            relay_port_max: Self::default_relay_port_max(),
         }
     }
 }

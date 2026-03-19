@@ -88,7 +88,7 @@ async fn main() {
 
     // Load config
     let config_path = data_dir.join("config.json");
-    let config: ServerConfig = if config_path.exists() {
+    let mut config: ServerConfig = if config_path.exists() {
         match std::fs::read_to_string(&config_path) {
             Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|e| {
                 tracing::warn!("Failed to parse config.json: {}, using defaults", e);
@@ -130,6 +130,18 @@ async fn main() {
         }
     }
 
+    // Sanitize public_address (strip scheme/port if user pasted a full URL)
+    if let Some(ref raw) = config.public_address {
+        let cleaned = turn::sanitize_public_address(raw);
+        if cleaned != *raw {
+            tracing::warn!(
+                "public_address '{}' looks like a URL — using '{}' (hostname only)",
+                raw, cleaned
+            );
+            config.public_address = Some(cleaned);
+        }
+    }
+
     // Start embedded TURN server if public_address is configured
     let lan_ip = turn::detect_lan_ip();
     let turn_secret = if config.public_address.is_some() {
@@ -139,6 +151,8 @@ async fn main() {
             config.turn_port,
             &secret,
             lan_ip,
+            config.relay_port_min,
+            config.relay_port_max,
         )
         .await
         {
@@ -146,7 +160,7 @@ async fn main() {
                 tracing::info!(
                     "Embedded TURN server on UDP port {}, relay ports {}-{}, public_address={}",
                     config.turn_port,
-                    49152, 49252,
+                    config.relay_port_min, config.relay_port_max,
                     config.public_address.as_ref().unwrap()
                 );
                 if let Some(lip) = lan_ip {
