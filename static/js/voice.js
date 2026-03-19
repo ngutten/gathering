@@ -278,6 +278,9 @@ function scheduleRenegotiation(pc, targetUser) {
 export function createPeerConnection(targetUser, isInitiator) {
   if (typeof RTCPeerConnection === 'undefined') return null;
 
+  console.log(`[voice] createPeerConnection(${targetUser}, initiator=${isInitiator})`, state.peerConnections[targetUser] ? 'REPLACING existing PC' : 'new');
+  if (state.peerConnections[targetUser]) console.trace('[voice] PC replacement trace');
+
   // Close existing connection if any
   if (state.peerConnections[targetUser]) {
     state.peerConnections[targetUser].close();
