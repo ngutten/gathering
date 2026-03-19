@@ -1,11 +1,12 @@
-// sfu-voice.js — SFU voice client: encode mic → binary WS, receive → decode → play
+// sfu-voice.js — SFU voice + video client: encode mic/camera/screen → binary WS, receive → decode → play/display
 //
-// The server fans out Opus-encoded audio frames over the existing WSS connection.
+// The server fans out Opus-encoded audio and VP8-encoded video frames over the existing WSS connection.
 // No WebRTC, no ICE, no STUN, no TURN, no extra ports.
 
 import state, { emit } from './state.js';
 import { send, sendBinary } from './transport.js';
 import { initOpus, opusEncode, opusDecode, closeOpus, opusSupported } from './opus-codec.js';
+import { initVideoCodec, videoEncode, videoDecode, requestKeyframe, closeVideoCodec, videoCodecSupported } from './video-codec.js';
 import { escapeHtml } from './render.js';
 
 // ── Constants ──
@@ -14,8 +15,10 @@ const SAMPLE_RATE = 48000;
 const FRAME_SIZE = 960; // 20ms at 48kHz
 const JITTER_BUFFER_FRAMES = 3; // 60ms fixed delay
 const STATS_INTERVAL_MS = 5000;
+const VIDEO_FPS = 30;
+const VIDEO_FRAME_INTERVAL = 1000 / VIDEO_FPS;
 
-// ── Module state ──
+// ── Module state (audio) ──
 let _audioCtx = null;
 let _captureNode = null;
 let _captureStream = null;
@@ -24,9 +27,22 @@ let _seqNum = 0;
 let _statsTimer = null;
 let _packetsReceived = 0;
 let _packetsLost = 0;
+let _silentFrameCount = 0;
+const SILENCE_HOLDOVER_FRAMES = 50; // Keep sending for 1s after speech ends
+
+// ── Module state (video) ──
+let _localCameraStream = null;
+let _localScreenStream = null;
+let _videoCaptureTimer = null;
+let _screenCaptureTimer = null;
+let _videoSeqNum = 0;
+let _videoPaused = false; // Server told us video is paused for bandwidth
 
 // Per-sender playback state: { gainNode, nextPlayTime, lastSeq, analyser, analyserInterval }
 const _senders = {};
+
+// Per-sender video decoders: { canvas, ctx, decoder (if WebCodecs) }
+const _videoReceivers = {};
 
 function getAudioContext() {
   if (!_audioCtx || _audioCtx.state === 'closed') {
@@ -74,10 +90,16 @@ export async function joinVoice(channel) {
   state.sfuActive = true;
   _joinTimestamp = performance.now();
   _seqNum = 0;
+  _silentFrameCount = 0;
+  _videoSeqNum = 0;
+  _videoPaused = false;
 
   // Set up AudioWorklet capture pipeline
+  // Use import.meta.url for correct resolution in Tauri (where document base URL
+  // differs from the asset protocol used by AudioWorklet module fetches).
   try {
-    await ctx.audioWorklet.addModule('./js/audio-capture-processor.js');
+    const processorUrl = new URL('./audio-capture-processor.js', import.meta.url).href;
+    await ctx.audioWorklet.addModule(processorUrl);
   } catch (err) {
     // Module may already be registered
     if (!err.message.includes('already been added')) {
@@ -89,24 +111,38 @@ export async function joinVoice(channel) {
   _captureNode = new AudioWorkletNode(ctx, 'audio-capture-processor');
 
   _captureNode.port.onmessage = (e) => {
-    if (state.isMuted) return;
+    if (state.isMuted) { _silentFrameCount = 0; return; }
     const pcmFrame = e.data; // Float32Array, 960 samples
+
+    // Silence detection: find peak amplitude (check every 16th sample)
+    let maxAmp = 0;
+    for (let i = 0; i < pcmFrame.length; i += 16) {
+      const a = Math.abs(pcmFrame[i]);
+      if (a > maxAmp) maxAmp = a;
+    }
+    const isSilent = maxAmp < 0.005;
+
+    if (isSilent) {
+      _silentFrameCount++;
+      // Stop sending entirely after holdover period (bandwidth saving)
+      if (_silentFrameCount > SILENCE_HOLDOVER_FRAMES) return;
+    } else {
+      _silentFrameCount = 0;
+    }
 
     const encoded = opusEncode(pcmFrame);
     if (!encoded) return;
-
-    // Check for silence (DTX): if all samples are near-zero, set silence flag
-    let isSilent = true;
-    for (let i = 0; i < pcmFrame.length; i += 48) {
-      if (Math.abs(pcmFrame[i]) > 0.01) { isSilent = false; break; }
-    }
 
     // Build client→server frame:
     // [type(1), seq(2), timestamp(4), flags(1), payload...]
     const seq = _seqNum & 0xFFFF;
     _seqNum++;
     const timestamp = ((performance.now() - _joinTimestamp) | 0) >>> 0;
-    const flags = (opusSupported() ? 0x01 : 0x00) | (isSilent ? 0x02 : 0x00);
+    // Only flag as silent well into holdover — the encoder output is pipelined
+    // 1 frame behind, so the first few "silent" frames carry the previous
+    // frame's (speech) encoded data.
+    const flagSilent = _silentFrameCount > 3;
+    const flags = (opusSupported() ? 0x01 : 0x00) | (flagSilent ? 0x02 : 0x00);
 
     const header = new Uint8Array(8);
     header[0] = 0x01; // type: audio
@@ -135,6 +171,10 @@ export async function joinVoice(channel) {
   document.getElementById('voice-leave-btn').style.display = '';
   document.getElementById('voice-controls').style.display = '';
   document.getElementById('voice-status').textContent = 'Connected to #' + ch + (opusSupported() ? '' : ' (uncompressed)');
+
+  // Show video area
+  const videoArea = document.getElementById('video-area');
+  if (videoArea) videoArea.style.display = '';
 
   startLocalSpeakingDetection();
   startStatsReporting();
@@ -165,9 +205,18 @@ export function cleanupVoice() {
   }
   state.localStream = null;
 
+  // Stop video capture
+  stopVideoCapture('camera');
+  stopVideoCapture('screen');
+
   // Stop all sender playback
   for (const senderId in _senders) {
     cleanupSender(senderId);
+  }
+
+  // Stop all video receivers
+  for (const key in _videoReceivers) {
+    cleanupVideoReceiver(key);
   }
 
   // Stop stats
@@ -183,6 +232,7 @@ export function cleanupVoice() {
   state.localAnalyser = null;
 
   closeOpus();
+  closeVideoCodec();
 
   // Close AudioContext
   if (_audioCtx && _audioCtx.state !== 'closed') {
@@ -201,6 +251,9 @@ export function cleanupVoice() {
   state.sfuIdMap = {};
   state.sfuIdReverse = {};
   state.sfuQuality = {};
+  state.cameraOn = false;
+  state.screenShareOn = false;
+  _videoPaused = false;
 
   // UI cleanup
   document.getElementById('voice-section').style.display = 'none';
@@ -213,16 +266,30 @@ export function cleanupVoice() {
   document.getElementById('mute-btn').textContent = 'Mute';
   document.getElementById('deafen-btn').classList.remove('active');
   document.getElementById('deafen-btn').textContent = 'Deafen';
+  const cameraBtn = document.getElementById('camera-btn');
+  if (cameraBtn) cameraBtn.classList.remove('active');
+  const screenBtn = document.getElementById('screenshare-btn');
+  if (screenBtn) screenBtn.classList.remove('active');
 
-  import('./chat-ui.js').then(m => m.renderVoiceChannelList());
+  // Remove video tiles and hide video area
+  import('./chat-ui.js').then(m => {
+    m.removeAllVideoTiles();
+    m.renderVoiceChannelList();
+  });
+  const videoArea = document.getElementById('video-area');
+  if (videoArea) videoArea.style.display = 'none';
+
+  // Remove bandwidth banner
+  hideBandwidthBanner();
 }
 
 // ── Binary frame handler (called from messages.js) ──
 
 export function handleBinaryFrame(data) {
-  if (!state.sfuActive || data.length < 10) return;
+  if (!state.sfuActive) return;
 
   const type = data[0];
+
   if (type === 0x03) {
     // Quality hint from server
     if (data.length >= 4) {
@@ -232,36 +299,411 @@ export function handleBinaryFrame(data) {
     }
     return;
   }
-  if (type !== 0x01) return;
 
-  // Forwarded audio frame:
-  // [type(1), sender_id(2), seq(2), timestamp(4), flags(1), payload...]
-  const senderId = (data[1] << 8) | data[2];
-  const seq = (data[3] << 8) | data[4];
-  const flags = data[9];
-  const isSilent = (flags & 0x02) !== 0;
-  const payload = data.slice(10);
+  if (type === 0x01) {
+    // Audio frame
+    if (data.length < 10) return;
+    const senderId = (data[1] << 8) | data[2];
+    const seq = (data[3] << 8) | data[4];
+    const flags = data[9];
+    const isSilent = (flags & 0x02) !== 0;
+    const payload = data.slice(10);
 
-  _packetsReceived++;
+    _packetsReceived++;
 
-  // Look up username from sender_id
-  const username = state.sfuIdReverse[senderId];
-  if (!username) return;
+    const username = state.sfuIdReverse[senderId];
+    if (!username) return;
+    if (state.isDeafened) return;
 
-  // If deafened, skip decoding
-  if (state.isDeafened) return;
+    if (payload.length === 0) {
+      updateSpeakingIndicator(username, false);
+      return;
+    }
 
-  // Decode and play
-  if (isSilent || payload.length === 0) {
-    // Silence frame — show no speaking indicator
-    updateSpeakingIndicator(username, false);
+    // Always decode and play — even for "silent"-flagged frames.
+    // The encoder output is pipelined 1 frame behind, so the silence
+    // flag may not match the actual encoded audio content.  Playing
+    // decoded silence is harmless and keeps the jitter buffer in sync.
+    const pcm = opusDecode(payload);
+    if (!pcm) return;
+    if (isSilent) updateSpeakingIndicator(username, false);
+    playAudio(senderId, username, pcm, seq);
     return;
   }
 
-  const pcm = opusDecode(payload);
-  if (!pcm) return;
+  if (type === 0x04) {
+    // Forwarded video frame:
+    // [type(1), sender_id(2), seq(2), timestamp(4), flags(1), width(2), height(2), VP8 payload...]
+    if (data.length < 14) return;
+    handleVideoFrame(data);
+    return;
+  }
+}
 
-  playAudio(senderId, username, pcm, seq);
+// ── Video frame handling ──
+
+function handleVideoFrame(data) {
+  const senderId = (data[1] << 8) | data[2];
+  // const seq = (data[3] << 8) | data[4]; // Available for future jitter buffering
+  const flags = data[9];
+  const isKey = (flags & 0x01) !== 0;
+  const isScreen = (flags & 0x02) !== 0;
+  const width = (data[10] << 8) | data[11];
+  const height = (data[12] << 8) | data[13];
+  const payload = data.slice(14);
+
+  const username = state.sfuIdReverse[senderId];
+  if (!username) return;
+
+  const tileType = isScreen ? 'screen' : 'camera';
+  const receiverKey = senderId + ':' + tileType;
+
+  // Ensure video receiver exists
+  const receiver = ensureVideoReceiver(receiverKey, senderId, username, tileType, width, height);
+  if (!receiver) return;
+
+  // Decode and render to canvas
+  if (videoCodecSupported() && receiver.decoder) {
+    const decoded = videoDecode(payload, isKey);
+    if (decoded) {
+      receiver.ctx.drawImage(decoded, 0, 0, receiver.canvas.width, receiver.canvas.height);
+      decoded.close();
+    }
+  } else {
+    // Fallback: create an ImageBitmap from the raw data (VP8)
+    // For browsers without VideoDecoder, we use a blob approach
+    const blob = new Blob([payload], { type: 'video/webm' });
+    createImageBitmap(blob).then(bitmap => {
+      receiver.ctx.drawImage(bitmap, 0, 0, receiver.canvas.width, receiver.canvas.height);
+      bitmap.close();
+    }).catch(() => {
+      // Fallback rendering not possible without codec
+    });
+  }
+}
+
+function ensureVideoReceiver(key, senderId, username, tileType, width, height) {
+  if (_videoReceivers[key]) {
+    // Update dimensions if changed
+    const r = _videoReceivers[key];
+    if (r.canvas.width !== width || r.canvas.height !== height) {
+      r.canvas.width = width;
+      r.canvas.height = height;
+    }
+    return r;
+  }
+
+  // Create a canvas-based video tile
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // Create a stream from the canvas for the video tile
+  const canvasStream = canvas.captureStream(0); // 0 = manual frame request
+
+  // Add as video tile via chat-ui
+  import('./chat-ui.js').then(m => {
+    m.addVideoTile(username, tileType, canvasStream);
+    // Replace the <video> element's source with our canvas for direct rendering
+    const tileId = `video-tile-${username}-${tileType}`;
+    const tile = document.getElementById(tileId);
+    if (tile) {
+      const video = tile.querySelector('video');
+      if (video) {
+        // Instead of using the stream, paint directly via the canvas
+        video.style.display = 'none';
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.objectFit = tileType === 'screen' ? 'contain' : 'cover';
+        canvas.style.borderRadius = 'inherit';
+        tile.appendChild(canvas);
+      }
+    }
+  });
+
+  // Initialize video decoder for this receiver if needed
+  let decoder = null;
+  if (videoCodecSupported()) {
+    try {
+      decoder = new VideoDecoder({
+        output: (frame) => {
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          // Request canvas stream frame
+          if (canvasStream.getVideoTracks().length > 0) {
+            try { canvasStream.getVideoTracks()[0].requestFrame(); } catch {}
+          }
+          frame.close();
+        },
+        error: (e) => console.warn('[sfu-video] Decoder error for', key, e),
+      });
+      decoder.configure({ codec: 'vp8' });
+    } catch (e) {
+      console.warn('[sfu-video] Failed to create decoder for', key, e);
+      decoder = null;
+    }
+  }
+
+  _videoReceivers[key] = { canvas, ctx, decoder, username, tileType, senderId, canvasStream };
+  return _videoReceivers[key];
+}
+
+function cleanupVideoReceiver(key) {
+  const r = _videoReceivers[key];
+  if (!r) return;
+  if (r.decoder && r.decoder.state !== 'closed') {
+    try { r.decoder.close(); } catch {}
+  }
+  if (r.canvas && r.canvas.parentNode) {
+    r.canvas.parentNode.removeChild(r.canvas);
+  }
+  import('./chat-ui.js').then(m => m.removeVideoTile(r.username, r.tileType));
+  delete _videoReceivers[key];
+}
+
+// ── Video capture + send ──
+
+export async function toggleCamera() {
+  if (!state.inVoiceChannel) return;
+
+  if (state.cameraOn) {
+    // Turn off camera
+    stopVideoCapture('camera');
+    state.cameraOn = false;
+    const btn = document.getElementById('camera-btn');
+    if (btn) btn.classList.remove('active');
+    import('./chat-ui.js').then(m => m.removeVideoTile(state.currentUser, 'camera'));
+    send('VideoStateChange', { channel: state.voiceChannel, video_on: false, screen_share_on: state.screenShareOn });
+  } else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      _localCameraStream = stream;
+      state.cameraOn = true;
+
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
+      const w = settings.width || 640;
+      const h = settings.height || 480;
+
+      await startVideoCapture(stream, 'camera', w, h);
+
+      const { addVideoTile } = await import('./chat-ui.js');
+      addVideoTile(state.currentUser, 'camera', stream);
+
+      const btn = document.getElementById('camera-btn');
+      if (btn) btn.classList.add('active');
+      send('VideoStateChange', { channel: state.voiceChannel, video_on: true, screen_share_on: state.screenShareOn });
+    } catch (err) {
+      emit('system-message', 'Camera access denied: ' + err.message);
+    }
+  }
+}
+
+export async function toggleScreenShare() {
+  if (!state.inVoiceChannel) return;
+
+  if (state.screenShareOn) {
+    stopVideoCapture('screen');
+    state.screenShareOn = false;
+    _localScreenStream = null;
+    const btn = document.getElementById('screenshare-btn');
+    if (btn) btn.classList.remove('active');
+    import('./chat-ui.js').then(m => m.removeVideoTile(state.currentUser, 'screen'));
+    send('VideoStateChange', { channel: state.voiceChannel, video_on: state.cameraOn, screen_share_on: false });
+  } else {
+    try {
+      const shareAudioBtn = document.getElementById('screen-audio-btn');
+      const wantAudio = shareAudioBtn && shareAudioBtn.classList.contains('active');
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: wantAudio,
+      });
+      _localScreenStream = stream;
+      state.screenShareOn = true;
+
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
+      const w = settings.width || 1280;
+      const h = settings.height || 720;
+
+      track.onended = () => {
+        stopVideoCapture('screen');
+        state.screenShareOn = false;
+        _localScreenStream = null;
+        const btn = document.getElementById('screenshare-btn');
+        if (btn) btn.classList.remove('active');
+        import('./chat-ui.js').then(m => m.removeVideoTile(state.currentUser, 'screen'));
+        send('VideoStateChange', { channel: state.voiceChannel, video_on: state.cameraOn, screen_share_on: false });
+      };
+
+      await startVideoCapture(stream, 'screen', w, h);
+
+      const { addVideoTile } = await import('./chat-ui.js');
+      addVideoTile(state.currentUser, 'screen', stream);
+
+      const btn = document.getElementById('screenshare-btn');
+      if (btn) btn.classList.add('active');
+      send('VideoStateChange', { channel: state.voiceChannel, video_on: state.cameraOn, screen_share_on: true });
+    } catch (err) {
+      if (err.name !== 'NotAllowedError') {
+        emit('system-message', 'Screen share failed: ' + err.message);
+      }
+    }
+  }
+}
+
+async function startVideoCapture(stream, type, w, h) {
+  // Cap resolution for bandwidth
+  const maxDim = type === 'screen' ? 1280 : 640;
+  if (w > maxDim) {
+    const ratio = maxDim / w;
+    w = maxDim;
+    h = Math.round(h * ratio);
+  }
+  // Ensure even dimensions (VP8 requirement)
+  w = w & ~1;
+  h = h & ~1;
+
+  const bitrate = type === 'screen' ? 1000000 : 500000;
+  await initVideoCodec(w, h, bitrate);
+
+  const track = stream.getVideoTracks()[0];
+  const isScreen = type === 'screen';
+
+  // Use canvas-based frame extraction (works in all browsers)
+  const video = document.createElement('video');
+  video.srcObject = new MediaStream([track]);
+  video.muted = true;
+  video.play().catch(() => {});
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  const timer = setInterval(() => {
+    if (video.readyState < 2) return; // Not enough data yet
+    ctx.drawImage(video, 0, 0, w, h);
+
+    if (videoCodecSupported()) {
+      // Use VideoFrame from canvas
+      const frame = new VideoFrame(canvas, { timestamp: performance.now() * 1000 });
+      const encoded = videoEncode(frame);
+      frame.close();
+
+      if (encoded) {
+        sendVideoFrame(encoded.data, encoded.isKey, isScreen, w, h);
+      }
+    } else {
+      // Fallback: send raw JPEG as payload (lossy but universal)
+      canvas.toBlob(blob => {
+        if (!blob) return;
+        blob.arrayBuffer().then(buf => {
+          sendVideoFrame(new Uint8Array(buf), true, isScreen, w, h);
+        });
+      }, 'image/jpeg', 0.5);
+    }
+  }, VIDEO_FRAME_INTERVAL);
+
+  if (isScreen) {
+    _screenCaptureTimer = { timer, video, canvas };
+  } else {
+    _videoCaptureTimer = { timer, video, canvas };
+  }
+}
+
+function stopVideoCapture(type) {
+  const capture = type === 'screen' ? _screenCaptureTimer : _videoCaptureTimer;
+  if (capture) {
+    clearInterval(capture.timer);
+    if (capture.video) {
+      capture.video.srcObject = null;
+      capture.video.remove();
+    }
+    if (capture.canvas) capture.canvas.remove();
+  }
+  if (type === 'screen') {
+    _screenCaptureTimer = null;
+    if (_localScreenStream) {
+      _localScreenStream.getTracks().forEach(t => t.stop());
+      _localScreenStream = null;
+    }
+  } else {
+    _videoCaptureTimer = null;
+    if (_localCameraStream) {
+      _localCameraStream.getTracks().forEach(t => t.stop());
+      _localCameraStream = null;
+    }
+  }
+}
+
+function sendVideoFrame(payload, isKey, isScreen, width, height) {
+  // Build client→server video frame:
+  // [type(1), seq(2), timestamp(4), flags(1), width(2), height(2), VP8 payload...]
+  const seq = _videoSeqNum & 0xFFFF;
+  _videoSeqNum++;
+  const timestamp = ((performance.now() - _joinTimestamp) | 0) >>> 0;
+  const flags = (isKey ? 0x01 : 0x00) | (isScreen ? 0x02 : 0x00);
+
+  const header = new Uint8Array(12);
+  header[0] = 0x04; // type: video
+  header[1] = (seq >> 8) & 0xFF;
+  header[2] = seq & 0xFF;
+  header[3] = (timestamp >> 24) & 0xFF;
+  header[4] = (timestamp >> 16) & 0xFF;
+  header[5] = (timestamp >> 8) & 0xFF;
+  header[6] = timestamp & 0xFF;
+  header[7] = flags;
+  header[8] = (width >> 8) & 0xFF;
+  header[9] = width & 0xFF;
+  header[10] = (height >> 8) & 0xFF;
+  header[11] = height & 0xFF;
+
+  const frame = new Uint8Array(12 + payload.length);
+  frame.set(header);
+  frame.set(payload, 12);
+  sendBinary(frame);
+}
+
+// ── Bandwidth pause/resume handlers ──
+
+export function handleVideoPaused(reason) {
+  _videoPaused = true;
+  console.log('[sfu] Video paused by server:', reason);
+
+  // Close all remote video receivers/tiles
+  for (const key in _videoReceivers) {
+    cleanupVideoReceiver(key);
+  }
+
+  showBandwidthBanner(reason);
+}
+
+export function handleVideoResumed() {
+  _videoPaused = false;
+  console.log('[sfu] Video resumed by server');
+  hideBandwidthBanner();
+  // Tiles will reappear as keyframes arrive from senders
+}
+
+function showBandwidthBanner(reason) {
+  let banner = document.getElementById('video-bandwidth-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'video-bandwidth-banner';
+    banner.className = 'video-bandwidth-banner';
+    const videoArea = document.getElementById('video-area');
+    if (videoArea) {
+      videoArea.insertAdjacentElement('afterbegin', banner);
+    }
+  }
+  banner.textContent = 'Video paused — ' + reason + '. Audio continues.';
+  banner.style.display = '';
+}
+
+function hideBandwidthBanner() {
+  const banner = document.getElementById('video-bandwidth-banner');
+  if (banner) banner.style.display = 'none';
 }
 
 // ── Playback (jitter buffer + Web Audio scheduling) ──
@@ -401,6 +843,12 @@ export function renderVoiceMembers() {
   const el = document.getElementById('voice-members');
   el.innerHTML = state.voiceMembers.map(u => {
     const isMe = u === state.currentUser;
+    const vs = state.peerVideoStates[u];
+    let icons = '';
+    if (vs) {
+      if (vs.video_on) icons += '<span class="voice-icon" title="Camera on">&#x1F4F7;</span>';
+      if (vs.screen_share_on) icons += '<span class="voice-icon" title="Sharing screen">&#x1F5A5;</span>';
+    }
     const vol = state.userVolumes[u] ?? 1.0;
     const volSlider = isMe ? '' :
       `<div class="voice-volume-row">` +
@@ -416,7 +864,7 @@ export function renderVoiceMembers() {
     return `<div class="voice-member connected" id="voice-member-${escapeHtml(u)}">` +
       `<div class="voice-member-info">` +
         `<span class="voice-dot"></span>` +
-        `<span class="voice-name">${escapeHtml(u)}</span>${qualityDot}` +
+        `<span class="voice-name">${escapeHtml(u)}</span>${icons}${qualityDot}` +
       `</div>${volSlider}</div>`;
   }).join('');
 
@@ -469,9 +917,16 @@ export function toggleDeafen() {
 // ── Cleanup on VoiceUserLeft ──
 
 export function removeSender(username) {
+  // Cleanup audio senders
   for (const senderId in _senders) {
     if (_senders[senderId].username === username) {
       cleanupSender(senderId);
+    }
+  }
+  // Cleanup video receivers for this user
+  for (const key in _videoReceivers) {
+    if (_videoReceivers[key].username === username) {
+      cleanupVideoReceiver(key);
     }
   }
 }

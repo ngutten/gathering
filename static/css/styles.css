@@ -438,7 +438,15 @@
   .video-pin-btn:hover { background: rgba(0,0,0,0.8); }
 
   .video-tile video.local-camera { transform: scaleX(-1); }
+  .video-tile canvas { display: block; }
   .voice-icon { font-size: 0.7rem; margin-left: 0.3rem; }
+
+  /* ── Bandwidth banner ── */
+  .video-bandwidth-banner {
+    background: var(--orange); color: #000; font-size: 0.8rem; font-weight: 600;
+    padding: 0.4rem 0.8rem; border-radius: 4px; margin-bottom: 0.4rem;
+    text-align: center; display: none;
+  }
 
   /* ── Voice section ─── */
   .voice-section { border-top: 1px solid var(--border); padding: 0.5rem 0; }

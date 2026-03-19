@@ -38,8 +38,11 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
   "registration_mode": "open",
   "channel_creation": "all",
   "enabled_widgets": null,
+  "voice_mode": "webrtc",
   "public_address": null,
   "turn_port": 3478,
+  "turn_port_alt": null,
+  "turn_tcp_port": null,
   "relay_port_min": 49152,
   "relay_port_max": 49252,
   "default_roles": {
@@ -151,23 +154,53 @@ Optional file at `<data-dir>/config.json`. Created automatically when an admin c
   ```
   All widgets disabled. The widget toolbar button is hidden.
 
+#### `voice_mode`
+
+- **Type:** string
+- **Values:** `"webrtc"`, `"sfu"`
+- **Default:** `"webrtc"`
+- **Admin panel:** not exposed (config.json only)
+- **Description:** How voice (and video/screen share) traffic is carried between clients.
+  - `"webrtc"` — Peer-to-peer WebRTC connections between each pair of users. Requires STUN/TURN for NAT traversal when users are on different networks. Best for small groups on good networks.
+  - `"sfu"` — Server-forwarded mode. All audio and video travels as binary frames over the existing WSS connection. No extra ports, no UDP, no NAT issues. Works through any firewall that allows HTTPS. The server fans out each sender's frames to all receivers, with per-client bandwidth detection that automatically drops video to preserve audio quality on slow connections.
+
+  SFU mode advertises the `voice_sfu` and `video_sfu` capabilities to clients. WebRTC-specific features (ICE, STUN/TURN) are unused in SFU mode, but `public_address` and TURN settings are still read for capability advertisement.
+
 #### `public_address`
 
 - **Type:** string or null
 - **Default:** `null` (TURN disabled, voice works on LAN only)
 - **Admin panel:** not exposed (config.json only)
-- **Description:** Your server's public IP address or DDNS hostname (e.g. `"203.0.113.5"` or `"myserver.ddns.net"`). When set, Gathering starts an embedded STUN/TURN server so voice chat works across NAT boundaries (different networks). When `null`, no STUN/TURN is started and voice only works between users on the same local network.
+- **Description:** Your server's public IP address or DDNS hostname (e.g. `"203.0.113.5"` or `"myserver.ddns.net"`). When set, Gathering starts an embedded STUN/TURN server so voice chat works across NAT boundaries (different networks) in WebRTC mode. When `null`, no STUN/TURN is started and WebRTC voice only works between users on the same local network.
 
-  **Router/firewall setup:** Forward these UDP ports to the server:
-  - Port `3478` (or custom `turn_port`) — STUN/TURN signaling
-  - Ports `49152–49252` (or custom `relay_port_min`–`relay_port_max`) — media relay
+  Not needed in SFU mode (`voice_mode: "sfu"`), since all media travels over the WSS connection.
+
+  **Router/firewall setup:** Forward these ports to the server:
+  - UDP port `3478` (or custom `turn_port`) — STUN/TURN signaling
+  - UDP ports `49152–49252` (or custom `relay_port_min`–`relay_port_max`) — media relay
+  - Optionally, a second UDP port (`turn_port_alt`) for mobile carrier compatibility
+  - Optionally, a TCP port (`turn_tcp_port`) for restrictive firewalls that block all UDP
 
 #### `turn_port`
 
 - **Type:** integer
 - **Default:** `3478`
 - **Admin panel:** not exposed (config.json only)
-- **Description:** UDP port for the embedded STUN/TURN server. Only used when `public_address` is set. Must be forwarded on your router.
+- **Description:** Primary UDP port for the embedded STUN/TURN server. Only used when `public_address` is set. Must be forwarded on your router.
+
+#### `turn_port_alt`
+
+- **Type:** integer or null
+- **Default:** `null` (disabled)
+- **Admin panel:** not exposed (config.json only)
+- **Description:** Optional second UDP port for TURN, typically set to `443` for compatibility with mobile carriers that only allow traffic on well-known ports. Only used when `public_address` is set. Must be forwarded on your router.
+
+#### `turn_tcp_port`
+
+- **Type:** integer or null
+- **Default:** `null` (disabled)
+- **Admin panel:** not exposed (config.json only)
+- **Description:** Optional TCP port for TURN-over-TCP. Useful for users behind restrictive firewalls or corporate proxies that block all UDP traffic. Clients will attempt TCP as a last resort after UDP TURN fails. Only used when `public_address` is set. Must be forwarded on your router.
 
 #### `relay_port_min`
 

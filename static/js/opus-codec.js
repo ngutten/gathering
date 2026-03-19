@@ -62,8 +62,27 @@ export async function initOpus() {
 
     _decoder = new AudioDecoder({
       output: (audioData) => {
-        const pcm = new Float32Array(audioData.numberOfFrames);
-        audioData.copyTo(pcm, { planeIndex: 0 });
+        const nFrames = audioData.numberOfFrames;
+        const nCh = audioData.numberOfChannels;
+
+        // Use allocationSize() for the correct buffer size — some implementations
+        // output interleaved stereo even when configured for mono.
+        let allocBytes;
+        try { allocBytes = audioData.allocationSize({ planeIndex: 0 }); }
+        catch { allocBytes = nFrames * nCh * 4; }
+
+        const raw = new Float32Array(allocBytes / 4);
+        audioData.copyTo(raw, { planeIndex: 0 });
+
+        // Downmix to mono if the decoder output more than one channel
+        let pcm;
+        if (raw.length === nFrames) {
+          pcm = raw;
+        } else {
+          // Interleaved multi-channel → take first channel
+          pcm = new Float32Array(nFrames);
+          for (let i = 0; i < nFrames; i++) pcm[i] = raw[i * nCh];
+        }
         _decodedChunks.push(pcm);
         audioData.close();
       },

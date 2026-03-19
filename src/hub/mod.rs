@@ -22,6 +22,12 @@ use std::path::PathBuf;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 100;
 
+/// Rolling quality stats report from a client (for bandwidth detection)
+struct QualityReport {
+    loss_percent: f64,
+    jitter_ms: u16,
+}
+
 /// A connected user's handle
 pub(super) struct Client {
     pub(super) username: String,
@@ -37,6 +43,12 @@ pub(super) struct Client {
     pub(super) protocol_version: Option<u32>,
     /// Sender to push messages to their WebSocket
     pub(super) tx: mpsc::UnboundedSender<Message>,
+    /// Rolling window of quality reports (last 3) for bandwidth detection
+    quality_stats: Vec<QualityReport>,
+    /// Whether this client is allowed to receive video frames
+    video_allowed: bool,
+    /// Consecutive "good" quality reports (for hysteresis on resume)
+    good_report_streak: u32,
 }
 
 /// Central message hub - owns all connected clients and routes messages
@@ -84,6 +96,9 @@ impl Hub {
             screen_share_on: false,
             protocol_version: None,
             tx,
+            quality_stats: Vec::new(),
+            video_allowed: true,
+            good_report_streak: 0,
         };
         self.clients.lock().await.insert(id, client);
         id
@@ -757,16 +772,17 @@ impl Hub {
         self.send_error(id, msg).await;
     }
 
-    /// Handle a binary WebSocket frame (SFU audio or quality stats).
+    /// Handle a binary WebSocket frame (SFU audio, quality stats, or video).
     ///
     /// Frame type byte:
     ///   0x01 = audio frame (8-byte header + Opus payload)
-    ///   0x02 = quality stats report (9 bytes)
+    ///   0x02 = quality stats report (5+ bytes)
+    ///   0x04 = video frame (12-byte header + VP8 payload)
     pub async fn handle_audio_binary(&self, id: usize, data: Vec<u8>) {
         if data.is_empty() { return; }
 
         let frame_type = data[0];
-        let clients = self.clients.lock().await;
+        let mut clients = self.clients.lock().await;
 
         // Must be authenticated and in a voice channel
         let (voice_channel, _username) = match clients.get(&id) {
@@ -800,11 +816,85 @@ impl Hub {
                 }
             }
             0x02 => {
-                // Quality stats report: log for now (future: use for bitrate hinting)
+                // Quality stats report:
                 // [type(1), packets_received(2), packets_lost(2), jitter_ms(2), rtt_estimate_ms(2)]
-                // No action needed in v1 — stats are informational
+                if data.len() < 5 { return; }
+                let packets_received = u16::from_be_bytes([data[1], data[2]]) as f64;
+                let packets_lost = u16::from_be_bytes([data[3], data[4]]) as f64;
+                let jitter_ms = if data.len() >= 7 {
+                    u16::from_be_bytes([data[5], data[6]])
+                } else {
+                    0
+                };
+
+                let total = packets_received + packets_lost;
+                let loss_percent = if total > 0.0 { packets_lost / total * 100.0 } else { 0.0 };
+
+                if let Some(client) = clients.get_mut(&id) {
+                    client.quality_stats.push(QualityReport { loss_percent, jitter_ms });
+                    // Keep rolling window of last 3 reports
+                    if client.quality_stats.len() > 3 {
+                        client.quality_stats.remove(0);
+                    }
+                    Self::evaluate_bandwidth(client);
+                }
+            }
+            0x04 => {
+                // Video frame: prepend sender_id (u16) to build forwarded frame
+                // Client sends: [type(1), seq(2), timestamp(4), flags(1), width(2), height(2), VP8...]
+                // Server sends: [type(1), sender_id(2), seq(2), timestamp(4), flags(1), width(2), height(2), VP8...]
+                if data.len() < 12 { return; }
+                let sender_id = (id as u16).to_be_bytes();
+                let mut forwarded = Vec::with_capacity(data.len() + 2);
+                forwarded.push(0x04); // type
+                forwarded.extend_from_slice(&sender_id); // sender_id (2 bytes)
+                forwarded.extend_from_slice(&data[1..]); // seq + timestamp + flags + width + height + payload
+
+                // Fan out to other clients in the same voice channel, but only if video is allowed
+                for (cid, client) in clients.iter() {
+                    if *cid == id { continue; }
+                    if client.voice_channel.as_deref() == Some(&voice_channel)
+                        && !client.username.is_empty()
+                        && client.video_allowed
+                    {
+                        let _ = client.tx.send(Message::Binary(forwarded.clone()));
+                    }
+                }
             }
             _ => {} // Unknown frame type, ignore
+        }
+    }
+
+    /// Evaluate bandwidth quality for a client and toggle video_allowed.
+    /// Thresholds: pause video if loss > 5% or jitter > 100ms across the rolling window.
+    /// Resume only after 2 consecutive "good" reports (hysteresis).
+    fn evaluate_bandwidth(client: &mut Client) {
+        if client.quality_stats.is_empty() { return; }
+
+        let max_loss = client.quality_stats.iter().map(|r| r.loss_percent).fold(0.0_f64, f64::max);
+        let max_jitter = client.quality_stats.iter().map(|r| r.jitter_ms).max().unwrap_or(0);
+
+        let is_degraded = max_loss > 5.0 || max_jitter > 100;
+
+        if is_degraded {
+            client.good_report_streak = 0;
+            if client.video_allowed {
+                client.video_allowed = false;
+                let reason = if max_loss > 5.0 {
+                    format!("packet loss {:.1}%", max_loss)
+                } else {
+                    format!("jitter {}ms", max_jitter)
+                };
+                let msg = ServerMsg::VideoPaused { reason };
+                let _ = Self::send_to(&client.tx, &msg);
+            }
+        } else {
+            client.good_report_streak += 1;
+            // Require 2 consecutive good reports before resuming
+            if !client.video_allowed && client.good_report_streak >= 2 {
+                client.video_allowed = true;
+                let _ = Self::send_to(&client.tx, &ServerMsg::VideoResumed);
+            }
         }
     }
 

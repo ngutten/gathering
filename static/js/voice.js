@@ -692,6 +692,12 @@ async function _handleVoiceSignal(fromUser, signalData) {
 export async function toggleCamera() {
   if (!state.inVoiceChannel) return;
 
+  // SFU mode: delegate to sfu-voice.js
+  if (state.sfuActive) {
+    getSfuModule().then(sfu => sfu.toggleCamera());
+    return;
+  }
+
   if (state.cameraOn) {
     // Turn off camera
     if (state.localCameraStream) {
@@ -741,6 +747,12 @@ export async function toggleCamera() {
 
 export async function toggleScreenShare() {
   if (!state.inVoiceChannel) return;
+
+  // SFU mode: delegate to sfu-voice.js
+  if (state.sfuActive) {
+    getSfuModule().then(sfu => sfu.toggleScreenShare());
+    return;
+  }
 
   if (state.screenShareOn) {
     stopScreenShare();

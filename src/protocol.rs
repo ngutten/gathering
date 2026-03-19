@@ -30,6 +30,7 @@ pub fn build_capabilities(config: &ServerConfig) -> Vec<String> {
     }
     if config.voice_mode == "sfu" {
         caps.push("voice_sfu".to_string());
+        caps.push("video_sfu".to_string());
     }
     // Advertise which widgets are enabled. `None` = all (blanket "widgets" already in base caps).
     // `Some(list)` = replace blanket with specific `widget:<id>` entries.
@@ -394,6 +395,12 @@ pub enum ServerMsg {
     UserProfile { username: String, profile: HashMap<String, String> },
     UserProfiles { profiles: HashMap<String, HashMap<String, String>> },
     ProfileUpdated { username: String, field: String, value: String },
+
+    // ── SFU Video Bandwidth ──
+    /// Video paused due to bandwidth constraints (per-client)
+    VideoPaused { reason: String },
+    /// Video resumed after bandwidth recovery
+    VideoResumed,
 
     // ── Server lifecycle ──
     /// Sent to all clients when the server is shutting down gracefully

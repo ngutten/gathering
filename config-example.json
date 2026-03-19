@@ -8,8 +8,16 @@
   "channel_creation": "all",
   "allow_key_backup": true,
   "enabled_widgets": null,
+
+  "voice_mode": "webrtc",
+
   "public_address": null,
   "turn_port": 3478,
+  "turn_port_alt": null,
+  "turn_tcp_port": null,
+  "relay_port_min": 49152,
+  "relay_port_max": 49252,
+
   "default_roles": {
     "user": [
       "send_message",

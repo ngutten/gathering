@@ -228,7 +228,23 @@ export function handleServerMsg(msg) {
 
     case 'UserVideoState':
       state.peerVideoStates[msg.username] = { video_on: msg.video_on, screen_share_on: msg.screen_share_on };
-      renderVoiceMembers();
+      if (state.sfuActive) {
+        import('./sfu-voice.js').then(sfu => sfu.renderVoiceMembers());
+      } else {
+        renderVoiceMembers();
+      }
+      break;
+
+    case 'VideoPaused':
+      if (state.sfuActive) {
+        import('./sfu-voice.js').then(sfu => sfu.handleVideoPaused(msg.reason));
+      }
+      break;
+
+    case 'VideoResumed':
+      if (state.sfuActive) {
+        import('./sfu-voice.js').then(sfu => sfu.handleVideoResumed());
+      }
       break;
 
     case 'TopicList':
