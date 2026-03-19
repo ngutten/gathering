@@ -451,6 +451,7 @@
   .voice-member-info { display: flex; align-items: center; gap: 0.4rem; }
   .voice-member .voice-dot { width: 8px; height: 8px; border-radius: 50%;
                              background: var(--text2); display: inline-block; flex-shrink: 0; }
+  .voice-member.connected .voice-dot { background: var(--green); }
   .voice-member.speaking .voice-dot { background: var(--green); box-shadow: 0 0 4px var(--green); }
   .voice-member.muted .voice-name { color: var(--text2); opacity: 0.6; }
   .voice-member.muted .voice-dot { background: var(--red); }

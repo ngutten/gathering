@@ -141,12 +141,13 @@ fn main() {
                 }
             });
 
-            // ── Linux: accept self-signed TLS, auto-grant media permissions ──
+            // ── Linux: accept self-signed TLS, enable WebRTC, auto-grant media permissions ──
             #[cfg(target_os = "linux")]
             {
                 let window = app.get_webview_window("main").unwrap();
                 window.with_webview(|webview| {
-                    use webkit2gtk::{WebViewExt, WebContextExt};
+                    use webkit2gtk::{WebViewExt, WebContextExt, SettingsExt};
+                    use glib::object::ObjectExt;
 
                     let wv = webview.inner();
 
@@ -154,9 +155,16 @@ fn main() {
                     let ctx: webkit2gtk::WebContext = wv.web_context().unwrap();
                     ctx.set_tls_errors_policy(webkit2gtk::TLSErrorsPolicy::Ignore);
 
+                    // Enable WebRTC and media stream (disabled by default in WebKitGTK)
+                    if let Some(settings) = wv.settings() {
+                        settings.set_enable_media_stream(true);
+                        // enable-webrtc property (WebKitGTK 2.38+) — use GLib property
+                        // API since the typed method may not be in the Rust bindings
+                        settings.set_property("enable-webrtc", true);
+                    }
+
                     // Auto-grant microphone/camera permission requests for voice chat
                     unsafe {
-                        use glib::object::ObjectExt;
                         use glib::ToValue;
                         wv.connect_unsafe(
                             "permission-request",

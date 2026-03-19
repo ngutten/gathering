@@ -4,6 +4,21 @@ import state, { emit } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
 
+// Shared AudioContext — created during user gesture (joinVoice) so it won't be
+// suspended by Chrome's autoplay policy.  Reused for all audio routing & analysis.
+let _voiceAudioCtx = null;
+
+function getVoiceAudioContext() {
+  if (!_voiceAudioCtx || _voiceAudioCtx.state === 'closed') {
+    _voiceAudioCtx = new AudioContext();
+  }
+  // Resume in case it was suspended (belt-and-suspenders)
+  if (_voiceAudioCtx.state === 'suspended') {
+    _voiceAudioCtx.resume().catch(() => {});
+  }
+  return _voiceAudioCtx;
+}
+
 function getRtcConfig() {
   return { iceServers: state.iceServers || [] };
 }
@@ -12,6 +27,10 @@ function getRtcConfig() {
 // Creates a temporary PeerConnection to gather ICE candidates and check
 // whether STUN (srflx) and TURN (relay) candidates are returned.
 export function testTurnConnectivity() {
+  if (typeof RTCPeerConnection === 'undefined') {
+    emit('system-message', 'TURN test: WebRTC is not available in this environment.');
+    return;
+  }
   const servers = state.iceServers;
   if (!servers || servers.length === 0) {
     emit('system-message', 'TURN test: No ICE servers configured (public_address not set on server).');
@@ -93,10 +112,18 @@ export function createVoiceChannel(channelName) {
 
 export function joinVoice(channel) {
   const ch = channel || state.currentChannel;
+  if (typeof RTCPeerConnection === 'undefined') {
+    emit('system-message', 'Voice chat is not supported in this environment (WebRTC unavailable).');
+    return;
+  }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     emit('system-message', 'Voice requires a secure connection (HTTPS). Connect via https:// or localhost.');
     return;
   }
+  // Create shared AudioContext now, during the user gesture, so Chrome won't
+  // suspend it.  This context is reused for all audio routing & speaking detection.
+  getVoiceAudioContext();
+
   navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
     state.localStream = stream;
     state.inVoiceChannel = true;
@@ -185,6 +212,11 @@ export function cleanupVoice() {
   const screenBtn = document.getElementById('screenshare-btn');
   if (screenBtn) screenBtn.classList.remove('active');
   document.querySelectorAll('audio.voice-remote').forEach(el => el.remove());
+  // Close shared AudioContext
+  if (_voiceAudioCtx && _voiceAudioCtx.state !== 'closed') {
+    _voiceAudioCtx.close().catch(() => {});
+    _voiceAudioCtx = null;
+  }
   // Remove all video tiles and hide video area
   import('./chat-ui.js').then(m => {
     m.removeAllVideoTiles();
@@ -244,6 +276,8 @@ function scheduleRenegotiation(pc, targetUser) {
 // ── Peer Connection (polite/impolite pattern) ──
 
 export function createPeerConnection(targetUser, isInitiator) {
+  if (typeof RTCPeerConnection === 'undefined') return null;
+
   // Close existing connection if any
   if (state.peerConnections[targetUser]) {
     state.peerConnections[targetUser].close();
@@ -268,6 +302,12 @@ export function createPeerConnection(targetUser, isInitiator) {
     const iceState = pc.iceConnectionState;
     console.log(`ICE connection to ${targetUser}: ${iceState}`);
 
+    // Update voice dot: show green when connected (even before speaking)
+    const memberEl = document.getElementById('voice-member-' + targetUser);
+    if (memberEl) {
+      memberEl.classList.toggle('connected', iceState === 'connected' || iceState === 'completed');
+    }
+
     if (iceState === 'connected' || iceState === 'completed') {
       pc._wasConnected = true;
       pc._iceRestartAttempts = 0;
@@ -288,6 +328,8 @@ export function createPeerConnection(targetUser, isInitiator) {
           });
         }).catch(() => {});
       }
+    } else if (iceState === 'checking') {
+      emit('system-message', `Connecting to ${targetUser}...`);
     } else if (iceState === 'disconnected') {
       if (pc._wasConnected) {
         emit('system-message', `Voice connection to ${targetUser} interrupted — attempting to reconnect...`);
@@ -353,7 +395,7 @@ export function createPeerConnection(targetUser, isInitiator) {
 
     if (track.kind === 'audio') {
       // Route through GainNode for per-user volume control
-      const audioCtx = new AudioContext();
+      const audioCtx = getVoiceAudioContext();
       const source = audioCtx.createMediaStreamSource(stream);
       const gainNode = audioCtx.createGain();
       const vol = state.userVolumes[targetUser] ?? 1.0;
@@ -465,12 +507,13 @@ async function _handleVoiceSignal(fromUser, signalData) {
     const polite = pc._polite;
 
     if (offerCollision && !polite) {
-      // Impolite: ignore the incoming offer during collision
+      console.log(`[voice] Ignoring offer from ${fromUser} (collision, impolite)`);
       return;
     }
 
     try {
       pc._handlingOffer = true;
+      console.log(`[voice] Handling offer from ${fromUser} (new PC: ${isNewPc})`);
 
       // Polite: rollback if needed (setRemoteDescription handles this in modern browsers)
       await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
@@ -480,8 +523,10 @@ async function _handleVoiceSignal(fromUser, signalData) {
         target_user: fromUser,
         signal_data: { type: 'answer', sdp: pc.localDescription }
       });
+      console.log(`[voice] Sent answer to ${fromUser}`);
     } catch (err) {
       console.error('Error handling offer from', fromUser, err);
+      emit('system-message', `Voice signaling error with ${fromUser}: ${err.message}`);
     } finally {
       pc._handlingOffer = false;
     }
@@ -495,10 +540,14 @@ async function _handleVoiceSignal(fromUser, signalData) {
     const pc = state.peerConnections[fromUser];
     if (pc) {
       try {
+        console.log(`[voice] Received answer from ${fromUser}`);
         await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
       } catch (err) {
         console.error('Error setting answer from', fromUser, err);
+        emit('system-message', `Voice signaling error with ${fromUser}: ${err.message}`);
       }
+    } else {
+      console.warn(`[voice] Received answer from ${fromUser} but no PeerConnection exists`);
     }
   } else if (signalData.type === 'ice-candidate') {
     const pc = state.peerConnections[fromUser];
@@ -705,7 +754,7 @@ export function toggleDeafen() {
 
 function startLocalSpeakingDetection() {
   try {
-    const ctx = new AudioContext();
+    const ctx = getVoiceAudioContext();
     const src = ctx.createMediaStreamSource(state.localStream);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
@@ -724,7 +773,7 @@ function startLocalSpeakingDetection() {
 function startRemoteSpeakingDetection(user, stream) {
   try {
     if (state.remoteAnalysers[user]) { clearInterval(state.remoteAnalysers[user].interval); }
-    const ctx = new AudioContext();
+    const ctx = getVoiceAudioContext();
     const src = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;

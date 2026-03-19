@@ -1,5 +1,6 @@
 // app.js — Entry point: imports all modules, wires events, auto-connects
 
+import { isTauri } from './config.js';
 import state, { on, snapshotState, restoreState, resetState } from './state.js';
 import { connectWS, disconnectWS, getConnectionState } from './transport.js';
 import { handleServerMsg } from './messages.js';
@@ -366,5 +367,24 @@ initContextMenu();
 initChannelContextMenu();
 initGhostButtons();
 setupDragAndDrop();
-checkServerInfo();
-if (state.token) connectWS();
+
+if (isTauri) {
+  // In Tauri, defer connection until storage module is ready so getServerBase()
+  // returns the correct server URL instead of falling back to localhost.
+  function waitForTauriStorage() {
+    if (window.gatheringStorage && window.gatheringStorage.getActiveServer()) {
+      checkServerInfo();
+      // Re-read token from scoped storage (state.token may have been read before storage was ready)
+      state.token = window.gatheringStorage.scopedGet('token');
+      if (state.token) connectWS();
+    } else if (window.gatheringStorage) {
+      // Storage ready but no server URL — tauri-bridge will show server picker
+    } else {
+      setTimeout(waitForTauriStorage, 50);
+    }
+  }
+  waitForTauriStorage();
+} else {
+  checkServerInfo();
+  if (state.token) connectWS();
+}
