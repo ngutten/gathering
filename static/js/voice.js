@@ -429,6 +429,24 @@ export function createPeerConnection(targetUser, isInitiator) {
       // Explicit play() — autoplay may be blocked outside user gesture context
       audio.play().catch(err => console.warn(`[voice] audio.play() blocked for ${targetUser}:`, err));
       startRemoteSpeakingDetection(targetUser, stream);
+
+      // Monitor track unmute (tracks often start muted until media flows)
+      if (track.muted) {
+        track.onunmute = () => console.log(`[voice] Audio track from ${targetUser} unmuted`);
+        // Check RTP stats after a few seconds
+        setTimeout(() => {
+          const currentPc = state.peerConnections[targetUser];
+          if (!currentPc) return;
+          currentPc.getStats().then(stats => {
+            stats.forEach(report => {
+              if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                console.log(`[voice] Audio RTP from ${targetUser}: bytes=${report.bytesReceived}, packets=${report.packetsReceived}, packetsLost=${report.packetsLost}`);
+              }
+            });
+          });
+          console.log(`[voice] PC connectionState=${currentPc.connectionState}, iceConnectionState=${currentPc.iceConnectionState}, track.muted=${track.muted}`);
+        }, 3000);
+      }
     } else if (track.kind === 'video') {
       // Look up metadata by stream.id
       const peerMeta = state.trackMetadata[targetUser] || {};
