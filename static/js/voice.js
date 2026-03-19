@@ -372,7 +372,7 @@ export function createPeerConnection(targetUser, isInitiator) {
   };
 
   pc.onnegotiationneeded = async () => {
-    if (pc._handlingOffer) return;
+    if (pc._handlingOffer || pc._suppressNegotiation) return;
     try {
       pc._makingOffer = true;
       const offer = await pc.createOffer();
@@ -393,9 +393,17 @@ export function createPeerConnection(targetUser, isInitiator) {
     const track = e.track;
     const stream = e.streams[0];
 
+    console.log(`[voice] ontrack from ${targetUser}: kind=${track.kind}, streams=${e.streams.length}, track.enabled=${track.enabled}, track.muted=${track.muted}`);
+
     if (track.kind === 'audio') {
-      // Route through GainNode for per-user volume control
+      if (!stream) {
+        console.error(`[voice] No stream for audio track from ${targetUser}`);
+        return;
+      }
       const audioCtx = getVoiceAudioContext();
+      console.log(`[voice] AudioContext state: ${audioCtx.state}`);
+
+      // Route through GainNode for per-user volume control
       const source = audioCtx.createMediaStreamSource(stream);
       const gainNode = audioCtx.createGain();
       const vol = state.userVolumes[targetUser] ?? 1.0;
@@ -418,6 +426,8 @@ export function createPeerConnection(targetUser, isInitiator) {
       audio.srcObject = dest.stream;
       audio.volume = vol;
       if (state.isDeafened) audio.muted = true;
+      // Explicit play() — autoplay may be blocked outside user gesture context
+      audio.play().catch(err => console.warn(`[voice] audio.play() blocked for ${targetUser}:`, err));
       startRemoteSpeakingDetection(targetUser, stream);
     } else if (track.kind === 'video') {
       // Look up metadata by stream.id
@@ -524,6 +534,11 @@ async function _handleVoiceSignal(fromUser, signalData) {
         signal_data: { type: 'answer', sdp: pc.localDescription }
       });
       console.log(`[voice] Sent answer to ${fromUser}`);
+      // Tracks added during createPeerConnection are already negotiated in
+      // this answer.  Suppress the stale onnegotiationneeded that addTrack
+      // queued — it would send a pointless offer and confuse the remote peer.
+      pc._suppressNegotiation = true;
+      setTimeout(() => { pc._suppressNegotiation = false; }, 0);
     } catch (err) {
       console.error('Error handling offer from', fromUser, err);
       emit('system-message', `Voice signaling error with ${fromUser}: ${err.message}`);
@@ -539,12 +554,16 @@ async function _handleVoiceSignal(fromUser, signalData) {
   } else if (signalData.type === 'answer') {
     const pc = state.peerConnections[fromUser];
     if (pc) {
-      try {
-        console.log(`[voice] Received answer from ${fromUser}`);
-        await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
-      } catch (err) {
-        console.error('Error setting answer from', fromUser, err);
-        emit('system-message', `Voice signaling error with ${fromUser}: ${err.message}`);
+      if (pc.signalingState !== 'have-local-offer') {
+        // Stale answer (e.g. from a renegotiation we no longer need) — safe to ignore
+        console.log(`[voice] Ignoring stale answer from ${fromUser} (state: ${pc.signalingState})`);
+      } else {
+        try {
+          console.log(`[voice] Received answer from ${fromUser}`);
+          await pc.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
+        } catch (err) {
+          console.error('Error setting answer from', fromUser, err);
+        }
       }
     } else {
       console.warn(`[voice] Received answer from ${fromUser} but no PeerConnection exists`);
