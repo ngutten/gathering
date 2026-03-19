@@ -1137,6 +1137,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     *last_pong.lock().unwrap() = Instant::now();
                 }
                 Message::Close(_) => break,
+                Message::Binary(data) => {
+                    if !data.is_empty() {
+                        state.hub.handle_audio_binary(client_id, data).await;
+                    }
+                }
                 _ => {}
             }
         }

@@ -28,6 +28,9 @@ pub fn build_capabilities(config: &ServerConfig) -> Vec<String> {
     if config.public_address.is_some() {
         caps.push("embedded_turn".to_string());
     }
+    if config.voice_mode == "sfu" {
+        caps.push("voice_sfu".to_string());
+    }
     // Advertise which widgets are enabled. `None` = all (blanket "widgets" already in base caps).
     // `Some(list)` = replace blanket with specific `widget:<id>` entries.
     if let Some(ref enabled) = config.enabled_widgets {
@@ -283,7 +286,12 @@ pub enum ServerMsg {
     /// Relayed WebRTC signaling data
     VoiceSignal { from_user: String, signal_data: serde_json::Value },
     /// Current voice channel members
-    VoiceMembers { channel: String, users: Vec<String> },
+    VoiceMembers {
+        channel: String,
+        users: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sfu_ids: Option<HashMap<String, u16>>,
+    },
     /// Voice channel occupancy update (broadcast to all)
     VoiceChannelOccupancy { channel: String, users: Vec<String> },
     /// A user's video/screen share state changed
@@ -614,6 +622,9 @@ pub struct ServerConfig {
     /// Optional TCP port for TURN-over-TCP (for restrictive firewalls blocking all UDP).
     #[serde(default)]
     pub turn_tcp_port: Option<u16>,
+    /// Voice mode: "webrtc" (default, peer-to-peer) or "sfu" (server-forwarded binary frames).
+    #[serde(default = "ServerConfig::default_voice_mode")]
+    pub voice_mode: String,
 }
 
 /// Deserialize a value that could be a JSON string, number, or null into Option<String>.
@@ -663,6 +674,7 @@ impl ServerConfig {
     fn default_turn_port() -> u16 { 3478 }
     fn default_relay_port_min() -> u16 { 49152 }
     fn default_relay_port_max() -> u16 { 49252 }
+    fn default_voice_mode() -> String { "webrtc".to_string() }
 }
 
 impl Default for ServerConfig {
@@ -696,6 +708,7 @@ impl Default for ServerConfig {
             relay_port_max: Self::default_relay_port_max(),
             turn_port_alt: None,
             turn_tcp_port: None,
+            voice_mode: Self::default_voice_mode(),
         }
     }
 }

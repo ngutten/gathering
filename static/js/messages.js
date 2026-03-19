@@ -1,6 +1,6 @@
 // messages.js — Server message dispatcher
 
-import state, { isDMChannel, emit } from './state.js';
+import state, { isDMChannel, emit, on as onEvent, serverHas } from './state.js';
 import { send } from './transport.js';
 import { initE2E, updateKeyUI, tryDecrypt, decryptChannelKey, encryptChannelKeyForUser, generateChannelKey, showKeyApproval, renderKeyRequests, checkPinnedKey, pinPublicKey, getPinnedKey, fingerprintFromBase64, showRestorePrompt } from './crypto.js';
 import { appendMessage, appendSystem, renderChannels, renderVoiceChannelList, renderOnlineUsers, renderDMList, showTyping, switchChannel, renderChannelMemberPanel, updateRequestKeyButton, updateReactionInDOM, updatePinInDOM, renderPinnedPanel, renderProfileModal, avatarHtml, refreshAvatarsInDOM, refreshAllMessageActions, initUserPFP, showE2EKeyPrompt, updateGhostButton } from './chat-ui.js';
@@ -156,41 +156,65 @@ export function handleServerMsg(msg) {
 
     case 'VoiceMembers':
       state.voiceMembers = msg.users;
-      renderVoiceMembers();
-      msg.users.forEach(user => {
-        if (user !== state.currentUser && !state.peerConnections[user]) {
-          createPeerConnection(user, true);
+      // Store SFU ID mappings if present
+      if (msg.sfu_ids) {
+        state.sfuIdMap = msg.sfu_ids;
+        state.sfuIdReverse = {};
+        for (const [username, id] of Object.entries(msg.sfu_ids)) {
+          state.sfuIdReverse[id] = username;
         }
-      });
+      }
+      if (state.sfuActive) {
+        // SFU mode: render via sfu-voice.js, no WebRTC PeerConnections
+        import('./sfu-voice.js').then(sfu => sfu.renderVoiceMembers());
+      } else {
+        renderVoiceMembers();
+        msg.users.forEach(user => {
+          if (user !== state.currentUser && !state.peerConnections[user]) {
+            createPeerConnection(user, true);
+          }
+        });
+      }
       break;
 
     case 'VoiceUserJoined':
       if (!state.voiceMembers.includes(msg.username)) state.voiceMembers.push(msg.username);
-      renderVoiceMembers();
-      // If we have video/screen tracks, proactively create a PC as initiator
-      // so our offer includes video m= lines from the start.  The new user
-      // will also initiate from VoiceMembers — glare is handled by polite/impolite.
-      if (state.inVoiceChannel && (state.cameraOn || state.screenShareOn) && !state.peerConnections[msg.username]) {
-        createPeerConnection(msg.username, true);
+      if (state.sfuActive) {
+        import('./sfu-voice.js').then(sfu => sfu.renderVoiceMembers());
+      } else {
+        renderVoiceMembers();
+        // If we have video/screen tracks, proactively create a PC as initiator
+        // so our offer includes video m= lines from the start.  The new user
+        // will also initiate from VoiceMembers — glare is handled by polite/impolite.
+        if (state.inVoiceChannel && (state.cameraOn || state.screenShareOn) && !state.peerConnections[msg.username]) {
+          createPeerConnection(msg.username, true);
+        }
       }
       break;
 
     case 'VoiceUserLeft':
       state.voiceMembers = state.voiceMembers.filter(u => u !== msg.username);
-      renderVoiceMembers();
-      if (state.peerConnections[msg.username]) {
-        state.peerConnections[msg.username].close();
-        delete state.peerConnections[msg.username];
+      if (state.sfuActive) {
+        import('./sfu-voice.js').then(sfu => {
+          sfu.removeSender(msg.username);
+          sfu.renderVoiceMembers();
+        });
+      } else {
+        renderVoiceMembers();
+        if (state.peerConnections[msg.username]) {
+          state.peerConnections[msg.username].close();
+          delete state.peerConnections[msg.username];
+        }
+        if (state.remoteAnalysers[msg.username]) {
+          clearInterval(state.remoteAnalysers[msg.username].interval);
+          delete state.remoteAnalysers[msg.username];
+        }
+        const audioEl = document.getElementById('audio-' + msg.username);
+        if (audioEl) audioEl.remove();
+        removeAllTilesForUser(msg.username);
+        delete state.trackMetadata[msg.username];
+        delete state.peerVideoStates[msg.username];
       }
-      if (state.remoteAnalysers[msg.username]) {
-        clearInterval(state.remoteAnalysers[msg.username].interval);
-        delete state.remoteAnalysers[msg.username];
-      }
-      const audioEl = document.getElementById('audio-' + msg.username);
-      if (audioEl) audioEl.remove();
-      removeAllTilesForUser(msg.username);
-      delete state.trackMetadata[msg.username];
-      delete state.peerVideoStates[msg.username];
       break;
 
     case 'VoiceChannelOccupancy':
@@ -762,3 +786,10 @@ export function handleServerMsg(msg) {
       break;
   }
 }
+
+// ── Wire binary WS frames to SFU voice handler ──
+onEvent('binary-message', (data) => {
+  if (state.sfuActive) {
+    import('./sfu-voice.js').then(sfu => sfu.handleBinaryFrame(data));
+  }
+});

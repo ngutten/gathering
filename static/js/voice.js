@@ -1,8 +1,24 @@
 // voice.js — WebRTC peer connections, mute/deafen, speaking detection, video & screen sharing
+// When the server advertises 'voice_sfu' capability, SFU functions are loaded
+// from sfu-voice.js via dynamic import and used instead of WebRTC.
 
-import state, { emit } from './state.js';
+import state, { emit, serverHas } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
+
+// Lazy-loaded SFU module reference
+let _sfuModule = null;
+
+async function getSfuModule() {
+  if (!_sfuModule) {
+    _sfuModule = await import('./sfu-voice.js');
+  }
+  return _sfuModule;
+}
+
+function isSfuMode() {
+  return serverHas('voice_sfu');
+}
 
 // Shared AudioContext — created during user gesture (joinVoice) so it won't be
 // suspended by Chrome's autoplay policy.  Reused for all audio routing & analysis.
@@ -111,6 +127,12 @@ export function createVoiceChannel(channelName) {
 }
 
 export function joinVoice(channel) {
+  // SFU mode: delegate entirely to sfu-voice.js
+  if (isSfuMode()) {
+    getSfuModule().then(sfu => sfu.joinVoice(channel));
+    return;
+  }
+
   const ch = channel || state.currentChannel;
   if (typeof RTCPeerConnection === 'undefined') {
     emit('system-message', 'Voice chat is not supported in this environment (WebRTC unavailable).');
@@ -157,11 +179,19 @@ export function joinVoiceChannel(channelName) {
 
 export function leaveVoice() {
   if (!state.inVoiceChannel) return;
+  if (state.sfuActive) {
+    getSfuModule().then(sfu => sfu.leaveVoice());
+    return;
+  }
   send('VoiceLeave', { channel: state.voiceChannel });
   cleanupVoice();
 }
 
 export function cleanupVoice() {
+  if (state.sfuActive) {
+    getSfuModule().then(sfu => sfu.cleanupVoice());
+    return;
+  }
   for (const user in state.peerConnections) {
     state.peerConnections[user].close();
     if (state.remoteAnalysers[user]) {

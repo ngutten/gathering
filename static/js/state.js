@@ -113,6 +113,12 @@ const INITIAL_STATE = {
   // ICE servers (STUN/TURN config from server)
   iceServers: [],
 
+  // SFU voice state
+  sfuIdMap: {},       // username → sender_id (u16)
+  sfuIdReverse: {},   // sender_id → username
+  sfuQuality: {},     // per-user quality info
+  sfuActive: false,   // whether SFU voice is currently active
+
   // Server branding (from /api/server-info)
   serverName: null,
   serverIcon: null,
@@ -162,6 +168,7 @@ export function serverHas(capability) {
 const NON_SNAPSHOT_FIELDS = new Set([
   'ws', 'localStream', 'peerConnections', 'localAnalyser', 'localAnalyserInterval',
   'remoteAnalysers', 'userGainNodes', 'localCameraStream', 'localScreenStream',
+  'sfuIdMap', 'sfuIdReverse', 'sfuQuality', 'sfuActive',
 ]);
 
 /** Take a snapshot of all serializable state fields */

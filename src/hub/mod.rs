@@ -757,6 +757,57 @@ impl Hub {
         self.send_error(id, msg).await;
     }
 
+    /// Handle a binary WebSocket frame (SFU audio or quality stats).
+    ///
+    /// Frame type byte:
+    ///   0x01 = audio frame (8-byte header + Opus payload)
+    ///   0x02 = quality stats report (9 bytes)
+    pub async fn handle_audio_binary(&self, id: usize, data: Vec<u8>) {
+        if data.is_empty() { return; }
+
+        let frame_type = data[0];
+        let clients = self.clients.lock().await;
+
+        // Must be authenticated and in a voice channel
+        let (voice_channel, _username) = match clients.get(&id) {
+            Some(c) if !c.username.is_empty() => {
+                match c.voice_channel {
+                    Some(ref vc) => (vc.clone(), c.username.clone()),
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+
+        match frame_type {
+            0x01 => {
+                // Audio frame: prepend sender_id (u16) to build forwarded frame
+                // Client sends: [type(1), seq(2), timestamp(4), flags(1), opus_payload...]
+                // Server sends: [type(1), sender_id(2), seq(2), timestamp(4), flags(1), opus_payload...]
+                if data.len() < 8 { return; }
+                let sender_id = (id as u16).to_be_bytes();
+                let mut forwarded = Vec::with_capacity(data.len() + 2);
+                forwarded.push(0x01); // type
+                forwarded.extend_from_slice(&sender_id); // sender_id (2 bytes)
+                forwarded.extend_from_slice(&data[1..]); // seq + timestamp + flags + payload
+
+                // Fan out to all other clients in the same voice channel
+                for (cid, client) in clients.iter() {
+                    if *cid == id { continue; }
+                    if client.voice_channel.as_deref() == Some(&voice_channel) && !client.username.is_empty() {
+                        let _ = client.tx.send(Message::Binary(forwarded.clone()));
+                    }
+                }
+            }
+            0x02 => {
+                // Quality stats report: log for now (future: use for bitrate hinting)
+                // [type(1), packets_received(2), packets_lost(2), jitter_ms(2), rtt_estimate_ms(2)]
+                // No action needed in v1 — stats are informational
+            }
+            _ => {} // Unknown frame type, ignore
+        }
+    }
+
     /// Graceful shutdown: notify all clients and drop their senders
     pub async fn shutdown(&self, reason: &str) {
         let mut clients = self.clients.lock().await;

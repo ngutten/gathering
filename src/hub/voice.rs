@@ -1,7 +1,37 @@
+use std::collections::HashMap;
 use super::Hub;
+use super::Client;
 use crate::protocol::ServerMsg;
 
 impl Hub {
+    /// Build SFU ID map (username → client_id as u16) for a voice channel.
+    /// Only populated when voice_mode is "sfu".
+    fn build_sfu_ids(&self, clients: &HashMap<usize, Client>, channel: &str) -> Option<HashMap<String, u16>> {
+        let is_sfu = self.config.read().unwrap_or_else(|e| e.into_inner()).voice_mode == "sfu";
+        if !is_sfu { return None; }
+        let mut map = HashMap::new();
+        for (cid, client) in clients.iter() {
+            if client.voice_channel.as_deref() == Some(channel) && !client.username.is_empty() {
+                map.insert(client.username.clone(), *cid as u16);
+            }
+        }
+        Some(map)
+    }
+
+    /// Send updated sfu_ids to all members of a voice channel (SFU mode only).
+    fn broadcast_sfu_ids(&self, clients: &HashMap<usize, Client>, channel: &str) {
+        let sfu_ids = match self.build_sfu_ids(clients, channel) {
+            Some(ids) => ids,
+            None => return,
+        };
+        let members: Vec<String> = Self::voice_channel_users(clients, channel);
+        let msg = ServerMsg::VoiceMembers {
+            channel: channel.to_string(),
+            users: members,
+            sfu_ids: Some(sfu_ids),
+        };
+        Self::broadcast_to_voice_channel_inner(clients, channel, &msg, None);
+    }
     pub(super) async fn handle_create_voice_channel(&self, id: usize, channel: String) {
         let clients = self.clients.lock().await;
         let username = match clients.get(&id) {
@@ -75,10 +105,12 @@ impl Hub {
         let members: Vec<String> = Self::voice_channel_users(&clients, &channel);
 
         // Send VoiceMembers to the joiner
+        let sfu_ids = self.build_sfu_ids(&clients, &channel);
         if let Some(client) = clients.get(&id) {
             if let Err(e) = Self::send_to(&client.tx, &ServerMsg::VoiceMembers {
                 channel: channel.clone(),
                 users: members,
+                sfu_ids,
             }) {
                 eprintln!("[hub::voice] send voice members failed: {e:?}");
             }
@@ -106,6 +138,9 @@ impl Hub {
             username,
         };
         Self::broadcast_to_voice_channel_inner(&clients, &channel, &join_msg, Some(id));
+
+        // In SFU mode, broadcast updated sfu_ids to all voice members
+        self.broadcast_sfu_ids(&clients, &channel);
 
         // Broadcast occupancy to all
         Self::broadcast_voice_occupancy(&clients, &channel);

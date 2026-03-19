@@ -59,6 +59,7 @@ export function connectWS() {
 
   setConnectionState('connecting');
   const ws = new WebSocket(wsUrl());
+  ws.binaryType = 'arraybuffer';
   state.ws = ws;
 
   ws.onopen = () => {
@@ -73,6 +74,12 @@ export function connectWS() {
   ws.onmessage = (e) => {
     // Guard: ignore messages from orphaned sockets
     if (state.ws !== ws) return;
+    // Binary frames (SFU audio) — emit separately
+    if (e.data instanceof ArrayBuffer) {
+      emit('binary-message', new Uint8Array(e.data));
+      resetPongTimer();
+      return;
+    }
     try {
       const msg = JSON.parse(e.data);
       if (!msg || !msg.type) {
@@ -150,6 +157,13 @@ document.addEventListener('visibilitychange', () => {
 export function send(type, payload = {}) {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify({ type, ...payload }));
+  }
+}
+
+/** Send a binary frame (ArrayBuffer or Uint8Array) over WebSocket */
+export function sendBinary(data) {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(data);
   }
 }
 
