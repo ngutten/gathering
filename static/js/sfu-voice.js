@@ -128,16 +128,18 @@ export async function joinVoice(channel) {
     pipelineOutput = ctx.createMediaStreamSource(stream);
   }
 
-  // Set up AudioWorklet capture pipeline
+  // Set up AudioWorklet processors (capture + playback)
   // Use import.meta.url for correct resolution in Tauri (where document base URL
   // differs from the asset protocol used by AudioWorklet module fetches).
-  try {
-    const processorUrl = new URL('./audio-capture-processor.js', import.meta.url).href;
-    await ctx.audioWorklet.addModule(processorUrl);
-  } catch (err) {
-    // Module may already be registered
-    if (!err.message.includes('already been added')) {
-      console.warn('[sfu] AudioWorklet load warning:', err.message);
+  const modules = ['audio-capture-processor.js', 'audio-playback-processor.js'];
+  for (const mod of modules) {
+    try {
+      const url = new URL('./' + mod, import.meta.url).href;
+      await ctx.audioWorklet.addModule(url);
+    } catch (err) {
+      if (!err.message.includes('already been added')) {
+        console.warn(`[sfu] AudioWorklet load warning (${mod}):`, err.message);
+      }
     }
   }
 
@@ -761,9 +763,19 @@ function ensureSender(senderId, username) {
   gainNode.gain.value = vol;
   gainNode.connect(ctx.destination);
 
-  // Analyser for speaking detection
+  // Playback worklet: continuous ring-buffer output (no inter-frame clicks)
+  let playbackNode = null;
+  try {
+    playbackNode = new AudioWorkletNode(ctx, 'audio-playback-processor');
+    playbackNode.connect(gainNode);
+  } catch (err) {
+    console.warn('[sfu] Playback worklet failed for sender', senderId, err);
+  }
+
+  // Analyser for speaking detection (taps the playback output)
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 256;
+  if (playbackNode) playbackNode.connect(analyser);
   const analyserData = new Uint8Array(analyser.frequencyBinCount);
 
   const analyserInterval = setInterval(() => {
@@ -775,15 +787,18 @@ function ensureSender(senderId, username) {
   _senders[senderId] = {
     username,
     gainNode,
+    playbackNode,
     analyser,
     analyserData,
     analyserInterval,
-    nextPlayTime: 0,
     lastSeq: -1,
     // Adaptive jitter buffer state
     lastArrivalTime: 0,
-    jitterEstimate: FRAME_DURATION_MS, // start at 1 frame
-    targetBufferMs: 60,  // start at 60ms (3 frames), will adapt down/up
+    jitterEstimate: FRAME_DURATION_MS,
+    targetBufferMs: 60,
+    // Pre-buffer: hold initial frames before starting playback
+    preBuffering: true,
+    preBufferQueue: [],
   };
   return _senders[senderId];
 }
@@ -807,6 +822,7 @@ function cleanupSender(senderId) {
   const s = _senders[senderId];
   if (!s) return;
   if (s.analyserInterval) clearInterval(s.analyserInterval);
+  if (s.playbackNode) s.playbackNode.disconnect();
   if (s.gainNode) s.gainNode.disconnect();
   if (s.analyser) s.analyser.disconnect();
   updateSpeakingIndicator(s.username, false);
@@ -814,7 +830,6 @@ function cleanupSender(senderId) {
 }
 
 function playAudio(senderId, username, pcmFloat32, seq) {
-  const ctx = getAudioContext();
   const sender = ensureSender(senderId, username);
 
   // Detect packet loss (sequence gap)
@@ -822,33 +837,32 @@ function playAudio(senderId, username, pcmFloat32, seq) {
     const expected = (sender.lastSeq + 1) & 0xFFFF;
     if (seq !== expected) {
       const gap = ((seq - expected + 0x10000) & 0xFFFF);
-      if (gap < 100) { // reasonable gap, not a sequence wrap-around discontinuity
+      if (gap < 100) {
         _packetsLost += gap;
       }
     }
   }
   sender.lastSeq = seq;
 
-  // Schedule playback with adaptive jitter buffer delay
-  const now = ctx.currentTime;
-  const jitterDelay = sender.targetBufferMs / 1000;
+  if (!sender.playbackNode) return;
 
-  if (sender.nextPlayTime < now) {
-    // Jitter buffer underrun — reset timing with current adaptive delay
-    sender.nextPlayTime = now + jitterDelay;
+  // Pre-buffer: accumulate frames equal to the jitter delay before starting playback.
+  // This fills the ring buffer so the worklet has enough data to play continuously.
+  if (sender.preBuffering) {
+    sender.preBufferQueue.push(pcmFloat32);
+    const bufferedMs = sender.preBufferQueue.length * FRAME_DURATION_MS;
+    if (bufferedMs < sender.targetBufferMs) return;
+    // Flush pre-buffer into the workback worklet
+    for (const frame of sender.preBufferQueue) {
+      sender.playbackNode.port.postMessage({ pcm: frame });
+    }
+    sender.preBufferQueue = [];
+    sender.preBuffering = false;
+    return;
   }
 
-  // Create AudioBuffer from PCM
-  const buffer = ctx.createBuffer(1, pcmFloat32.length, SAMPLE_RATE);
-  buffer.getChannelData(0).set(pcmFloat32);
-
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(sender.analyser);
-  sender.analyser.connect(sender.gainNode);
-  source.start(sender.nextPlayTime);
-
-  sender.nextPlayTime += FRAME_DURATION_MS / 1000;
+  // Steady state: push decoded PCM directly into the ring buffer
+  sender.playbackNode.port.postMessage({ pcm: pcmFloat32 });
 }
 
 // ── Speaking detection (local) ──
