@@ -5,7 +5,8 @@
 import state, { emit, serverHas } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
-import { buildAudioPipeline, MIC_CONSTRAINTS } from './audio-pipeline.js';
+import { buildAudioPipeline, setRnnoiseEnabled, MIC_CONSTRAINTS } from './audio-pipeline.js';
+import { scopedGet } from './storage.js';
 
 // Lazy-loaded SFU module reference
 let _sfuModule = null;
@@ -160,7 +161,8 @@ export async function joinVoice(channel) {
 
     // Build audio processing pipeline: high-pass filter + noise gate
     try {
-      const pipeline = await buildAudioPipeline(ctx, rawStream);
+      const rnnoiseEnabled = scopedGet('rnnoise_enabled') !== 'false';
+      const pipeline = await buildAudioPipeline(ctx, rawStream, { rnnoiseEnabled });
       _audioPipeline = pipeline;
       const dest = ctx.createMediaStreamDestination();
       pipeline.outputNode.connect(dest);
@@ -917,6 +919,17 @@ export function toggleDeafen() {
   btn.classList.toggle('active', state.isDeafened);
   btn.textContent = state.isDeafened ? 'Undeafen' : 'Deafen';
   if (state.isDeafened && !state.isMuted) toggleMute();
+}
+
+/** Toggle RNNoise on the active audio pipeline at runtime */
+export function toggleRnnoise(enabled) {
+  if (_audioPipeline) {
+    setRnnoiseEnabled(_audioPipeline, enabled);
+  }
+  // Also toggle on SFU pipeline if active
+  if (state.sfuActive && _sfuModule) {
+    _sfuModule.toggleRnnoise(enabled);
+  }
 }
 
 // ── Speaking Detection ──

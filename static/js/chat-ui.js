@@ -6,7 +6,7 @@ import { escapeHtml, renderRichContent, formatFileSize, isImageMime, isAudioMime
 import { tryDecrypt, getKeyFingerprint, generateChannelKey, encryptChannelKeyForUser, generateE2EKey, importPrivateKey } from './crypto.js';
 import { apiUrl, fileUrl } from './config.js';
 import { openReactionPicker, closeReactionPicker } from './emoji.js';
-import { scopedSet } from './storage.js';
+import { scopedGet, scopedSet } from './storage.js';
 
 const TYPING_INDICATOR_TIMEOUT_MS = 3000;
 const CHANNEL_SETTINGS_REFRESH_DELAY_MS = 300;
@@ -1495,6 +1495,7 @@ function renderUserSettingsTab(tab) {
     case 'chat': renderChatTab(el); break;
     case 'notifications': renderNotificationsTab(el); break;
     case 'files': renderFilesTab(el); break;
+    case 'voice': renderVoiceTab(el); break;
     case 'encryption': renderEncryptionTab(el); break;
   }
 }
@@ -1585,6 +1586,23 @@ function renderFilesTab(el) {
   el.innerHTML = '<div id="files-content"><div style="color:var(--text2);font-size:0.8rem;">Loading files...</div></div>';
   state.fileManagerOpen = true;
   send('ListMyFiles');
+}
+
+function renderVoiceTab(el) {
+  const rnnoiseOn = scopedGet('rnnoise_enabled') !== 'false'; // default on
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-label" style="margin-bottom:0.5rem;">Noise Suppression</div>
+      <div style="font-size:0.8rem;color:var(--text2);margin-bottom:0.5rem;">
+        RNNoise uses a neural network to remove background noise during speech
+        (typing, fans, background voices, music). Adds ~10ms latency.
+      </div>
+      <label style="display:block;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="settings-rnnoise-toggle" ${rnnoiseOn ? 'checked' : ''} onchange="toggleRnnoiseFromSettings(this.checked)">
+        Enable noise suppression
+      </label>
+    </div>
+  `;
 }
 
 function renderEncryptionTab(el) {

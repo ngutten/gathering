@@ -7,7 +7,7 @@ import { handleServerMsg } from './messages.js';
 import { checkServerInfo, doLogin, doRegister, doLogout } from './auth.js';
 import { appendMessage, appendSystem, renderChannels, renderOnlineUsers, renderDMList, startDM, showTyping, switchChannel, openChannelSettings, closeChannelSettings, toggleChannelRestricted, toggleChannelAnonymous, toggleChannelGhost, setChannelMaxTtl, addChannelMember, removeChannelMember, requestChannelKey, startReply, cancelReply, togglePinMessage, openPinnedPanel, closePinnedPanel, openProfile, closeProfile, openEditProfile, saveProfile, uploadAvatar, openUserSettings, closeUserSettings, saveUserSettings, initContextMenu, togglePinnedBanner, toggleUserMenu, closeUserMenu, initUserPFP, switchUserSettingsTab, initChannelContextMenu, openCreateChannel, closeCreateChannel, submitCreateChannel, initGhostButtons, updateGhostButton, getEffectiveGhostTtl } from './chat-ui.js';
 import { sendMessage, handleInputKey, handleFileSelect, renderPendingFiles, removePendingFile, startEditMessage, cancelEdit, deleteMessage, hideMessage, joinChannel, setupDragAndDrop, toggleRecording, cancelRecording } from './input.js';
-import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, testTurnConnectivity } from './voice.js';
+import { createVoiceChannel, joinVoice, joinVoiceChannel, leaveVoice, cleanupVoice, toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, testTurnConnectivity, toggleRnnoise } from './voice.js';
 import { switchView, openTopic, backToTopics, createTopic, sendReply, handleReplyKey, togglePinTopic, startEditTopic, saveEditTopic, cancelEditTopic, deleteCurrentTopic, startEditReply, saveEditReply, cancelEditReply, deleteReply, handleTopicFileSelect, handleReplyFileSelect, removePendingFileFrom } from './topics.js';
 import { openAdminPanel, closeAdminPanel, switchAdminTab, updateSetting, deleteChannel, createInvite, assignRoleToUser, removeRoleFromUser } from './admin.js';
 import { exportPrivateKey, importPrivateKey, approveKeyRequest, denyKeyRequest, generateE2EKey, rekeyChannel, setupKeySync } from './crypto.js';
@@ -17,6 +17,7 @@ import { toggleSearch, closeSearch, executeSearch, scrollToMessage } from './sea
 import { setNotifPref } from './notifications.js';
 import { toggleWidgetPicker, toggleWidget, deactivateWidget, getActiveWidgets, onChannelSwitch as widgetChannelSwitch } from './widgets/widget-api.js';
 import { send } from './transport.js';
+import { scopedSet } from './storage.js';
 // Import widgets to register them
 import './widgets/dice-roller.js';
 import './widgets/initiative.js';
@@ -172,6 +173,10 @@ window.openPinnedPanel = openPinnedPanel;
 window.closePinnedPanel = closePinnedPanel;
 window.togglePinnedBanner = togglePinnedBanner;
 window.setNotifPref = setNotifPref;
+window.toggleRnnoiseFromSettings = function(checked) {
+  scopedSet('rnnoise_enabled', checked ? 'true' : 'false');
+  toggleRnnoise(checked);
+};
 window.toggleSidebar = function() {
   document.querySelector('.sidebar').classList.toggle('open');
   document.getElementById('sidebar-backdrop').classList.toggle('open');

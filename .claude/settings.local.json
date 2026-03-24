@@ -26,7 +26,10 @@
       "Bash(node:*)",
       "Bash(cargo doc:*)",
       "WebFetch(domain:www.npmjs.com)",
-      "Bash(for f:*)"
+      "Bash(for f:*)",
+      "Bash(ls /home/claude/gathering/static/js/*.js | head -30)",
+      "Read(//tmp/rnnoise-build/rnnoise/**)",
+      "Bash(emcc -O3 -s EXPORTED_FUNCTIONS='[\"\"_rnnoise_create\"\",\"\"_rnnoise_destroy\"\",\"\"_rnnoise_process_frame\"\",\"\"_rnnoise_get_size\"\",\"\"_malloc\"\",\"\"_free\"\"]' -s EXPORTED_RUNTIME_METHODS='[]' -s ALLOW_MEMORY_GROWTH=0 -s INITIAL_MEMORY=524288 -s STANDALONE_WASM=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 --no-entry .libs/librnnoise.a -o /home/claude/gathering/static/wasm/rnnoise.wasm)"
     ]
   }
 }

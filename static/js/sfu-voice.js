@@ -8,7 +8,8 @@ import { send, sendBinary } from './transport.js';
 import { initOpus, opusEncode, opusDecode, closeOpus, opusSupported } from './opus-codec.js';
 import { initVideoCodec, videoEncode, videoDecode, requestKeyframe, closeVideoCodec, videoCodecSupported } from './video-codec.js';
 import { escapeHtml } from './render.js';
-import { buildAudioPipeline, MIC_CONSTRAINTS } from './audio-pipeline.js';
+import { buildAudioPipeline, setRnnoiseEnabled, MIC_CONSTRAINTS } from './audio-pipeline.js';
+import { scopedGet } from './storage.js';
 
 // ── Constants ──
 const FRAME_DURATION_MS = 20;
@@ -99,7 +100,8 @@ export async function joinVoice(channel) {
   // Build audio processing pipeline: high-pass filter + noise gate
   let pipelineOutput;
   try {
-    const pipeline = await buildAudioPipeline(ctx, stream);
+    const rnnoiseEnabled = scopedGet('rnnoise_enabled') !== 'false';
+    const pipeline = await buildAudioPipeline(ctx, stream, { rnnoiseEnabled });
     _audioPipeline = pipeline;
     pipelineOutput = pipeline.outputNode;
   } catch (pipelineErr) {
@@ -929,6 +931,13 @@ export function toggleDeafen() {
   btn.classList.toggle('active', state.isDeafened);
   btn.textContent = state.isDeafened ? 'Undeafen' : 'Deafen';
   if (state.isDeafened && !state.isMuted) toggleMute();
+}
+
+/** Toggle RNNoise on the active SFU audio pipeline */
+export function toggleRnnoise(enabled) {
+  if (_audioPipeline) {
+    setRnnoiseEnabled(_audioPipeline, enabled);
+  }
 }
 
 // ── Cleanup on VoiceUserLeft ──
