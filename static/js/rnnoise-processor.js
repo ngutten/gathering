@@ -80,6 +80,11 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
 
     const exports = instance.exports;
 
+    // Call WASM initializer to set up heap/internal state
+    if (typeof exports._initialize === 'function') {
+      exports._initialize();
+    }
+
     // Allocate RNNoise state
     this._rnnoiseState = exports.rnnoise_create(0); // NULL for default model
     if (!this._rnnoiseState) {

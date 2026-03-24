@@ -5,7 +5,7 @@
 
 import state, { emit } from './state.js';
 import { send, sendBinary } from './transport.js';
-import { initOpus, opusEncode, opusDecode, setOnEncoded, setOnDecoded, closeOpus, opusSupported } from './opus-codec.js';
+import { initOpus, opusEncode, opusDecode, setOnEncoded, setOnDecoded, setOnDecodeError, closeOpus, opusSupported } from './opus-codec.js';
 import { initVideoCodec, videoEncode, videoDecode, requestKeyframe, closeVideoCodec, videoCodecSupported } from './video-codec.js';
 import { escapeHtml } from './render.js';
 import { buildAudioPipeline, setRnnoiseEnabled, MIC_CONSTRAINTS } from './audio-pipeline.js';
@@ -16,9 +16,9 @@ const FRAME_DURATION_MS = 20;
 const SAMPLE_RATE = 48000;
 const FRAME_SIZE = 960; // 20ms at 48kHz
 // Adaptive jitter buffer bounds (in ms)
-const JITTER_MIN_MS = 20;   // 1 frame — floor for LAN
+const JITTER_MIN_MS = 40;   // 2 frames — floor (safe minimum)
 const JITTER_MAX_MS = 120;  // 6 frames — ceiling for bad connections
-const JITTER_ALPHA = 0.05;  // EMA smoothing factor for jitter estimation
+const JITTER_ALPHA = 0.15;  // EMA smoothing factor for jitter estimation (higher = faster adapt)
 const STATS_INTERVAL_MS = 5000;
 const VIDEO_FPS = 30;
 const VIDEO_FRAME_INTERVAL = 1000 / VIDEO_FPS;
@@ -84,11 +84,15 @@ export async function joinVoice(channel) {
   }
 
   // Register decode callback — fires when WebCodecs produces decoded PCM
-  // (eliminates the 20ms pipeline delay from the old synchronous queue drain)
   setOnDecoded((pcm) => {
     const ctx = _pendingDecodes.shift();
     if (!ctx) return;
     playAudio(ctx.senderId, ctx.username, pcm, ctx.seq);
+  });
+
+  // If a decode errors, discard the pending context to keep the queue in sync
+  setOnDecodeError(() => {
+    _pendingDecodes.shift();
   });
 
   let stream;
@@ -148,7 +152,7 @@ export async function joinVoice(channel) {
     const seq = _seqNum & 0xFFFF;
     _seqNum++;
     const timestamp = ((performance.now() - _joinTimestamp) | 0) >>> 0;
-    const flagSilent = _silentFrameCount > 1;
+    const flagSilent = _silentFrameCount > 3;
     const flags = (opusSupported() ? 0x01 : 0x00) | (flagSilent ? 0x02 : 0x00);
 
     const header = new Uint8Array(8);
@@ -171,9 +175,9 @@ export async function joinVoice(channel) {
     if (state.isMuted) { _silentFrameCount = 0; return; }
     const pcmFrame = e.data; // Float32Array, 960 samples
 
-    // Silence detection: find peak amplitude (check every 16th sample)
+    // Silence detection: find peak amplitude (check every 8th sample)
     let maxAmp = 0;
-    for (let i = 0; i < pcmFrame.length; i += 16) {
+    for (let i = 0; i < pcmFrame.length; i += 8) {
       const a = Math.abs(pcmFrame[i]);
       if (a > maxAmp) maxAmp = a;
     }
@@ -778,8 +782,8 @@ function ensureSender(senderId, username) {
     lastSeq: -1,
     // Adaptive jitter buffer state
     lastArrivalTime: 0,
-    jitterEstimate: FRAME_DURATION_MS, // start conservative (1 frame)
-    targetBufferMs: JITTER_MIN_MS * 2,  // start at 40ms, will adapt
+    jitterEstimate: FRAME_DURATION_MS, // start at 1 frame
+    targetBufferMs: 60,  // start at 60ms (3 frames), will adapt down/up
   };
   return _senders[senderId];
 }

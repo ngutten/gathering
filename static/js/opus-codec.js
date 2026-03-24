@@ -7,6 +7,7 @@
 //   opusDecode(Uint8Array)   → void  (result delivered via onDecoded callback)
 //   setOnEncoded(cb)     → register callback(Uint8Array) for encode output
 //   setOnDecoded(cb)     → register callback(Float32Array) for decode output
+//   setOnDecodeError(cb) → register callback(Error) for decode errors
 //   closeOpus()          → void
 //   opusSupported()      → bool  (true if we have real Opus, false = raw PCM fallback)
 
@@ -19,6 +20,7 @@ let _encoder = null;
 let _decoder = null;
 let _onEncoded = null;  // callback for encoded Opus packets
 let _onDecoded = null;  // callback for decoded PCM frames
+let _onDecodeError = null; // callback for decode errors (so caller can sync state)
 let _useWebCodecs = false;
 let _initialized = false;
 
@@ -88,7 +90,10 @@ export async function initOpus() {
         if (_onDecoded) _onDecoded(pcm);
         audioData.close();
       },
-      error: (e) => console.error('[opus] Decoder error:', e),
+      error: (e) => {
+        console.error('[opus] Decoder error:', e);
+        if (_onDecodeError) _onDecodeError(e);
+      },
     });
     _decoder.configure({
       codec: 'opus',
@@ -109,6 +114,9 @@ export function setOnEncoded(cb) { _onEncoded = cb; }
 
 /** Register callback for decoded PCM frames: cb(Float32Array) */
 export function setOnDecoded(cb) { _onDecoded = cb; }
+
+/** Register callback for decode errors: cb(Error) — lets caller stay in sync */
+export function setOnDecodeError(cb) { _onDecodeError = cb; }
 
 /**
  * Feed a 20ms PCM frame (960 Float32 samples) to the encoder.
@@ -182,6 +190,7 @@ export function closeOpus() {
   _decoder = null;
   _onEncoded = null;
   _onDecoded = null;
+  _onDecodeError = null;
   _initialized = false;
   _useWebCodecs = false;
 }
