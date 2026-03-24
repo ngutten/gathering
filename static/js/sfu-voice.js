@@ -53,235 +53,6 @@ const _pendingDecodes = [];
 // Per-sender video decoders: { canvas, ctx, decoder (if WebCodecs) }
 const _videoReceivers = {};
 
-// ── Audio debug instrumentation ──
-// Enable from console: sfuAudioDebug.start()
-// Dump while running:   sfuAudioDebug.dump()
-// Stop and analyze:     sfuAudioDebug.stop()
-const _dbg = {
-  active: false,
-  capturedFrames: [],   // { t, peak, rms, first4, last4 } — mic capture (pre-encode)
-  encodedPackets: [],   // { t, size } — encoder output
-  decodedFrames: [],    // { t, peak, rms, first4, last4, sender } — decoder output
-  receiveTimings: [],   // { t, senderId, seq } — frame arrival
-  maxFrames: 500,
-};
-
-function dbgCapture(pcm) {
-  if (!_dbg.active || _dbg.capturedFrames.length >= _dbg.maxFrames) return;
-  // Count consecutive zero-runs (evidence of RNNoise passthrough frame alignment bug)
-  let zeroRuns = 0, inZero = false, maxZeroRun = 0, curZeroRun = 0;
-  for (let i = 0; i < pcm.length; i++) {
-    if (pcm[i] === 0) {
-      if (!inZero) { zeroRuns++; inZero = true; curZeroRun = 0; }
-      curZeroRun++;
-      if (curZeroRun > maxZeroRun) maxZeroRun = curZeroRun;
-    } else {
-      inZero = false;
-    }
-  }
-  _dbg.capturedFrames.push({
-    t: performance.now(),
-    peak: dbgPeak(pcm),
-    rms: dbgRms(pcm),
-    first4: Array.from(pcm.slice(0, 4)),
-    last4: Array.from(pcm.slice(-4)),
-    zeroRuns,
-    maxZeroRun,
-  });
-}
-
-function dbgEncoded(size) {
-  if (!_dbg.active || _dbg.encodedPackets.length >= _dbg.maxFrames) return;
-  _dbg.encodedPackets.push({ t: performance.now(), size });
-}
-
-function dbgDecoded(pcm, senderId) {
-  if (!_dbg.active || _dbg.decodedFrames.length >= _dbg.maxFrames) return;
-  _dbg.decodedFrames.push({
-    t: performance.now(),
-    peak: dbgPeak(pcm),
-    rms: dbgRms(pcm),
-    first4: Array.from(pcm.slice(0, 4)),
-    last4: Array.from(pcm.slice(-4)),
-    len: pcm.length,
-    sender: senderId,
-  });
-}
-
-function dbgReceive(senderId, seq) {
-  if (!_dbg.active || _dbg.receiveTimings.length >= _dbg.maxFrames) return;
-  _dbg.receiveTimings.push({ t: performance.now(), senderId, seq });
-}
-
-function dbgPeak(pcm) {
-  let max = 0;
-  for (let i = 0; i < pcm.length; i++) {
-    const a = Math.abs(pcm[i]);
-    if (a > max) max = a;
-  }
-  return max;
-}
-
-function dbgRms(pcm) {
-  let sum = 0;
-  for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
-  return Math.sqrt(sum / pcm.length);
-}
-
-function dbgAnalyze() {
-  console.group('%c[sfu-debug] Audio Pipeline Analysis', 'color: #0af; font-weight: bold');
-  console.log(`WebCodecs Opus: ${opusSupported() ? 'YES' : 'NO (raw PCM fallback)'}`);
-
-  // ── Capture (mic → encoder input) ──
-  const cap = _dbg.capturedFrames;
-  if (cap.length > 0) {
-    console.group(`Mic capture: ${cap.length} frames`);
-    const peaks = cap.map(f => f.peak);
-    console.log(`  Peak — min: ${Math.min(...peaks).toFixed(6)}, max: ${Math.max(...peaks).toFixed(6)}`);
-    const intervals = [];
-    for (let i = 1; i < cap.length; i++) intervals.push(cap[i].t - cap[i-1].t);
-    if (intervals.length) {
-      intervals.sort((a,b) => a - b);
-      console.log(`  Interval — min: ${intervals[0].toFixed(1)}ms, med: ${intervals[Math.floor(intervals.length/2)].toFixed(1)}ms, max: ${intervals[intervals.length-1].toFixed(1)}ms`);
-    }
-    console.log(`  Waveform: ${dbgAscii(peaks)}`);
-    // Zero-run analysis (detects RNNoise passthrough frame alignment bug)
-    const framesWithZeros = cap.filter(f => f.zeroRuns > 0);
-    if (framesWithZeros.length > 0) {
-      const maxRuns = framesWithZeros.map(f => f.maxZeroRun);
-      const totalRuns = framesWithZeros.reduce((a, f) => a + f.zeroRuns, 0);
-      console.warn(`  ⚠ Zero-runs: ${framesWithZeros.length}/${cap.length} frames contain zero-runs (${totalRuns} total runs, max consecutive: ${Math.max(...maxRuns)} samples)`);
-    } else {
-      console.log(`  Zero-runs: none detected (clean signal)`);
-    }
-    console.groupEnd();
-  }
-
-  // ── Encoded packets ──
-  const enc = _dbg.encodedPackets;
-  if (enc.length > 0) {
-    console.group(`Encoded: ${enc.length} packets`);
-    const sizes = enc.map(p => p.size);
-    console.log(`  Packet size — min: ${Math.min(...sizes)}, max: ${Math.max(...sizes)}, avg: ${(sizes.reduce((a,b)=>a+b,0)/sizes.length).toFixed(0)} bytes`);
-    const intervals = [];
-    for (let i = 1; i < enc.length; i++) intervals.push(enc[i].t - enc[i-1].t);
-    if (intervals.length) {
-      intervals.sort((a,b) => a - b);
-      console.log(`  Interval — min: ${intervals[0].toFixed(1)}ms, med: ${intervals[Math.floor(intervals.length/2)].toFixed(1)}ms, max: ${intervals[intervals.length-1].toFixed(1)}ms`);
-    }
-    console.groupEnd();
-  }
-
-  // ── Receive timings ──
-  const rx = _dbg.receiveTimings;
-  if (rx.length > 0) {
-    // Group by sender
-    const bySender = {};
-    for (const r of rx) {
-      (bySender[r.senderId] ||= []).push(r);
-    }
-    for (const [sid, frames] of Object.entries(bySender)) {
-      console.group(`Received from sender ${sid}: ${frames.length} frames`);
-      const intervals = [];
-      let gaps = 0;
-      for (let i = 1; i < frames.length; i++) {
-        intervals.push(frames[i].t - frames[i-1].t);
-        const expectedSeq = (frames[i-1].seq + 1) & 0xFFFF;
-        if (frames[i].seq !== expectedSeq) gaps++;
-      }
-      if (intervals.length) {
-        intervals.sort((a,b) => a - b);
-        console.log(`  Arrival interval — min: ${intervals[0].toFixed(1)}ms, med: ${intervals[Math.floor(intervals.length/2)].toFixed(1)}ms, max: ${intervals[intervals.length-1].toFixed(1)}ms`);
-        const jitter = intervals.map(t => Math.abs(t - 20));
-        console.log(`  Jitter — avg: ${(jitter.reduce((a,b)=>a+b,0)/jitter.length).toFixed(1)}ms, max: ${Math.max(...jitter).toFixed(1)}ms`);
-      }
-      console.log(`  Sequence gaps: ${gaps}`);
-      console.groupEnd();
-    }
-  }
-
-  // ── Decoded frames (post-decode, pre-playback) ──
-  const dec = _dbg.decodedFrames;
-  if (dec.length > 0) {
-    console.group(`Decoded: ${dec.length} frames`);
-    const peaks = dec.map(f => f.peak);
-    const rmss = dec.map(f => f.rms);
-    console.log(`  Peak — min: ${Math.min(...peaks).toFixed(6)}, max: ${Math.max(...peaks).toFixed(6)}, avg: ${(peaks.reduce((a,b)=>a+b,0)/peaks.length).toFixed(6)}`);
-    console.log(`  RMS  — min: ${Math.min(...rmss).toFixed(6)}, max: ${Math.max(...rmss).toFixed(6)}, avg: ${(rmss.reduce((a,b)=>a+b,0)/rmss.length).toFixed(6)}`);
-    console.log(`  Frame size — ${dec[0].len} samples (${(dec[0].len / SAMPLE_RATE * 1000).toFixed(0)}ms)`);
-
-    // Frame boundary discontinuities
-    let disconts = 0, maxJump = 0;
-    const jumps = [];
-    for (let i = 1; i < dec.length; i++) {
-      const prevLast = dec[i-1].last4[3];
-      const currFirst = dec[i].first4[0];
-      const jump = Math.abs(currFirst - prevLast);
-      jumps.push(jump);
-      if (jump > 0.05) { disconts++; if (jump > maxJump) maxJump = jump; }
-    }
-    console.log(`  Boundary discontinuities (>0.05): ${disconts}/${dec.length - 1} (max: ${maxJump.toFixed(4)})`);
-    if (jumps.length) {
-      console.log(`  Boundary jump — avg: ${(jumps.reduce((a,b)=>a+b,0)/jumps.length).toFixed(6)}, med: ${jumps.sort((a,b)=>a-b)[Math.floor(jumps.length/2)].toFixed(6)}`);
-    }
-
-    // Inter-decode timing
-    const intervals = [];
-    for (let i = 1; i < dec.length; i++) intervals.push(dec[i].t - dec[i-1].t);
-    if (intervals.length) {
-      intervals.sort((a,b) => a - b);
-      console.log(`  Decode interval — min: ${intervals[0].toFixed(1)}ms, med: ${intervals[Math.floor(intervals.length/2)].toFixed(1)}ms, max: ${intervals[intervals.length-1].toFixed(1)}ms`);
-    }
-
-    // Zero frames
-    const zeros = dec.filter(f => f.peak === 0).length;
-    if (zeros) console.warn(`  ⚠ ${zeros} all-zero frames`);
-    const clipped = dec.filter(f => f.peak >= 0.99).length;
-    if (clipped) console.warn(`  ⚠ ${clipped} clipping frames`);
-
-    // Sample-level detail for first few boundaries
-    console.group('First 5 frame boundaries (last4 | first4):');
-    for (let i = 1; i < Math.min(6, dec.length); i++) {
-      const p = dec[i-1].last4.map(v => v.toFixed(4));
-      const c = dec[i].first4.map(v => v.toFixed(4));
-      console.log(`  ${i-1}→${i}: [${p.join(', ')} | ${c.join(', ')}]`);
-    }
-    console.groupEnd();
-
-    console.log(`  Peak waveform: ${dbgAscii(peaks)}`);
-    console.groupEnd();
-  }
-
-  console.groupEnd();
-}
-
-function dbgAscii(values) {
-  const w = 72;
-  const step = Math.max(1, Math.floor(values.length / w));
-  let s = '';
-  for (let i = 0; i < values.length && s.length < w; i += step) {
-    const v = Math.abs(values[i]);
-    s += v > 0.5 ? '█' : v > 0.2 ? '▓' : v > 0.05 ? '▒' : v > 0.01 ? '░' : v > 0.001 ? '·' : ' ';
-  }
-  return s;
-}
-
-window.sfuAudioDebug = {
-  start() {
-    _dbg.active = true;
-    _dbg.capturedFrames = [];
-    _dbg.encodedPackets = [];
-    _dbg.decodedFrames = [];
-    _dbg.receiveTimings = [];
-    console.log('[sfu-debug] Recording — speak for a few seconds, then sfuAudioDebug.stop()');
-  },
-  stop() {
-    _dbg.active = false;
-    dbgAnalyze();
-  },
-  dump() { dbgAnalyze(); },
-  raw() { return _dbg; },
-};
 
 function getAudioContext() {
   if (!_audioCtx || _audioCtx.state === 'closed') {
@@ -397,7 +168,6 @@ export async function joinVoice(channel) {
     const frame = new Uint8Array(8 + encoded.length);
     frame.set(header);
     frame.set(encoded, 8);
-    dbgEncoded(encoded.length);
     sendBinary(frame);
   });
 
@@ -422,7 +192,6 @@ export async function joinVoice(channel) {
     }
 
     // Feed PCM to encoder — result delivered via onEncoded callback
-    dbgCapture(pcmFrame);
     opusEncode(pcmFrame);
   };
 
@@ -592,7 +361,6 @@ export function handleBinaryFrame(data) {
     }
 
     // Update jitter estimate for this sender (before decode)
-    dbgReceive(senderId, seq);
     const sender = ensureSender(senderId, username);
     updateJitter(sender);
 
@@ -1047,7 +815,6 @@ function cleanupSender(senderId) {
 }
 
 function playAudio(senderId, username, pcmFloat32, seq) {
-  dbgDecoded(pcmFloat32, senderId);
   const ctx = getAudioContext();
   const sender = ensureSender(senderId, username);
 

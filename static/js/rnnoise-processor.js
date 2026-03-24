@@ -20,9 +20,11 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
     // WASM state
     this._wasm = null;       // WebAssembly instance
     this._rnnoiseState = 0;  // pointer to RNNoiseState
-    this._inputPtr = 0;      // pointer to float[480] in WASM heap
+    this._inputPtr = 0;      // pointer to float[480] input buffer in WASM heap
+    this._outputPtr = 0;     // pointer to float[480] output buffer in WASM heap
     this._enabled = true;
     this._ready = false;
+    this._errorLogged = false;
 
     // Input accumulator: collects 128-sample browser blocks into 480-sample RNNoise frames
     this._inBuf = new Float32Array(RNNOISE_FRAME_SIZE);
@@ -97,10 +99,13 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
       throw new Error('rnnoise_create returned null');
     }
 
-    // Allocate float buffer in WASM heap for one frame (480 * 4 bytes)
+    // Allocate separate input and output float buffers in WASM heap (480 * 4 bytes each).
+    // Using the same pointer for both in/out can cause OOB access in some WASM builds
+    // because the RNN reads input while simultaneously writing output.
     this._inputPtr = exports.malloc(RNNOISE_FRAME_SIZE * 4);
-    if (!this._inputPtr) {
-      throw new Error('malloc failed for input buffer');
+    this._outputPtr = exports.malloc(RNNOISE_FRAME_SIZE * 4);
+    if (!this._inputPtr || !this._outputPtr) {
+      throw new Error('malloc failed for audio buffers');
     }
   }
 
@@ -112,25 +117,41 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
       // Pass through unchanged
       processed = this._inBuf;
     } else {
-      const exports = this._wasm.exports;
-      const heap = new Float32Array(exports.memory.buffer);
-      const offset = this._inputPtr >> 2;
+      try {
+        const exports = this._wasm.exports;
+        // Re-create view each call — buffer reference can change after WASM ops
+        const heap = new Float32Array(exports.memory.buffer);
+        const inOffset = this._inputPtr >> 2;
+        const outOffset = this._outputPtr >> 2;
 
-      // RNNoise expects samples scaled to 16-bit range (-32768..32767)
-      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-        heap[offset + i] = this._inBuf[i] * 32768.0;
+        // RNNoise expects samples scaled to 16-bit range (-32768..32767)
+        for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
+          heap[inOffset + i] = this._inBuf[i] * 32768.0;
+        }
+
+        // Process with separate input/output buffers to avoid aliasing issues
+        const vad = exports.rnnoise_process_frame(this._rnnoiseState, this._outputPtr, this._inputPtr);
+
+        // Re-acquire view in case WASM internals modified memory layout
+        const heapOut = new Float32Array(exports.memory.buffer);
+
+        // Scale back to float range
+        for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
+          this._inBuf[i] = heapOut[outOffset + i] / 32768.0;
+        }
+        processed = this._inBuf;
+
+        this.port.postMessage({ type: 'vad', probability: vad });
+      } catch (err) {
+        // WASM trap (e.g. memory access out of bounds) — disable to avoid repeated crashes
+        if (!this._errorLogged) {
+          console.error('[rnnoise-processor] WASM error, disabling noise suppression:', err.message);
+          this._errorLogged = true;
+          this.port.postMessage({ type: 'error', message: err.message });
+        }
+        this._ready = false;
+        processed = this._inBuf;
       }
-
-      // Process — modifies buffer in-place, returns VAD probability
-      const vad = exports.rnnoise_process_frame(this._rnnoiseState, this._inputPtr, this._inputPtr);
-
-      // Scale back to float range and write into _inBuf (reuse as temp)
-      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-        this._inBuf[i] = heap[offset + i] / 32768.0;
-      }
-      processed = this._inBuf;
-
-      this.port.postMessage({ type: 'vad', probability: vad });
     }
 
     // Append processed samples to ring buffer
