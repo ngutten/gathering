@@ -16,6 +16,82 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{Mutex, mpsc};
 
+/// Lightweight voice routing table — separate from the main clients lock
+/// so audio forwarding never blocks on chat/channel operations.
+struct VoiceRoute {
+    tx: mpsc::UnboundedSender<Message>,
+    channel: String,
+    username: String,
+}
+
+/// Lock-free-ish voice routing: std::sync::Mutex held for microseconds only.
+/// Audio frames use this instead of the main clients lock, so forwarding
+/// never blocks on chat/channel operations.
+struct VoiceRouter {
+    routes: std::sync::Mutex<HashMap<usize, VoiceRoute>>,
+}
+
+impl VoiceRouter {
+    fn join(&self, id: usize, tx: mpsc::UnboundedSender<Message>, channel: String, username: String) {
+        self.routes.lock().unwrap_or_else(|e| e.into_inner())
+            .insert(id, VoiceRoute { tx, channel, username });
+    }
+
+    fn leave(&self, id: usize) {
+        self.routes.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    }
+
+    /// Forward an audio frame to all other clients in the same voice channel.
+    /// Returns quickly — the std::sync::Mutex is held only for the iteration.
+    fn forward_audio(&self, sender_id: usize, data: &[u8]) {
+        if data.len() < 8 { return; }
+        let routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        let sender_channel = match routes.get(&sender_id) {
+            Some(r) if !r.username.is_empty() => &r.channel,
+            _ => return,
+        };
+
+        // Build forwarded frame: [type(1), sender_id(2), seq + timestamp + flags + payload]
+        let sid_bytes = (sender_id as u16).to_be_bytes();
+        let mut forwarded = Vec::with_capacity(data.len() + 2);
+        forwarded.push(0x01);
+        forwarded.extend_from_slice(&sid_bytes);
+        forwarded.extend_from_slice(&data[1..]);
+        let msg = Message::Binary(forwarded);
+
+        for (cid, route) in routes.iter() {
+            if *cid == sender_id { continue; }
+            if route.channel == *sender_channel && !route.username.is_empty() {
+                let _ = route.tx.send(msg.clone());
+            }
+        }
+    }
+
+    /// Forward a video frame to all other clients in the same voice channel.
+    fn forward_video(&self, sender_id: usize, data: &[u8]) {
+        if data.len() < 12 { return; }
+        let routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        let sender_channel = match routes.get(&sender_id) {
+            Some(r) if !r.username.is_empty() => &r.channel,
+            _ => return,
+        };
+
+        let sid_bytes = (sender_id as u16).to_be_bytes();
+        let mut forwarded = Vec::with_capacity(data.len() + 2);
+        forwarded.push(0x04);
+        forwarded.extend_from_slice(&sid_bytes);
+        forwarded.extend_from_slice(&data[1..]);
+        let msg = Message::Binary(forwarded);
+
+        for (cid, route) in routes.iter() {
+            if *cid == sender_id { continue; }
+            if route.channel == *sender_channel && !route.username.is_empty() {
+                let _ = route.tx.send(msg.clone());
+            }
+        }
+    }
+}
+
 use crate::db::Db;
 use crate::protocol::{ChannelInfo, ClientMsg, ServerConfig, ServerMsg, PROTOCOL_VERSION, build_capabilities};
 use std::path::PathBuf;
@@ -62,6 +138,8 @@ pub struct Hub {
     turn_secret: Option<String>,
     /// Server's LAN IP for hairpin NAT workaround
     lan_ip: Option<std::net::IpAddr>,
+    /// Fast voice routing table — never blocks on the main clients lock
+    voice_router: VoiceRouter,
 }
 
 impl Hub {
@@ -79,6 +157,7 @@ impl Hub {
             config: RwLock::new(config),
             turn_secret,
             lan_ip,
+            voice_router: VoiceRouter { routes: std::sync::Mutex::new(HashMap::new()) },
         }
     }
 
@@ -106,6 +185,7 @@ impl Hub {
 
     /// Remove a client connection
     pub async fn disconnect(&self, id: usize) {
+        self.voice_router.leave(id);
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.remove(&id) {
             if !client.username.is_empty() {
@@ -778,46 +858,24 @@ impl Hub {
     ///   0x01 = audio frame (8-byte header + Opus payload)
     ///   0x02 = quality stats report (5+ bytes)
     ///   0x04 = video frame (12-byte header + VP8 payload)
+    ///
+    /// Audio and video frames use the fast VoiceRouter (std::sync::Mutex held
+    /// for microseconds) so they never block on the main clients lock.
+    /// Quality stats are infrequent and still use the main lock.
     pub async fn handle_audio_binary(&self, id: usize, data: Vec<u8>) {
         if data.is_empty() { return; }
 
-        let frame_type = data[0];
-        let mut clients = self.clients.lock().await;
-
-        // Must be authenticated and in a voice channel
-        let (voice_channel, _username) = match clients.get(&id) {
-            Some(c) if !c.username.is_empty() => {
-                match c.voice_channel {
-                    Some(ref vc) => (vc.clone(), c.username.clone()),
-                    None => return,
-                }
-            }
-            _ => return,
-        };
-
-        match frame_type {
+        match data[0] {
             0x01 => {
-                // Audio frame: prepend sender_id (u16) to build forwarded frame
-                // Client sends: [type(1), seq(2), timestamp(4), flags(1), opus_payload...]
-                // Server sends: [type(1), sender_id(2), seq(2), timestamp(4), flags(1), opus_payload...]
-                if data.len() < 8 { return; }
-                let sender_id = (id as u16).to_be_bytes();
-                let mut forwarded = Vec::with_capacity(data.len() + 2);
-                forwarded.push(0x01); // type
-                forwarded.extend_from_slice(&sender_id); // sender_id (2 bytes)
-                forwarded.extend_from_slice(&data[1..]); // seq + timestamp + flags + payload
-
-                // Fan out to all other clients in the same voice channel
-                for (cid, client) in clients.iter() {
-                    if *cid == id { continue; }
-                    if client.voice_channel.as_deref() == Some(&voice_channel) && !client.username.is_empty() {
-                        let _ = client.tx.send(Message::Binary(forwarded.clone()));
-                    }
-                }
+                // Audio frame — fast path, no async lock
+                self.voice_router.forward_audio(id, &data);
+            }
+            0x04 => {
+                // Video frame — fast path, no async lock
+                self.voice_router.forward_video(id, &data);
             }
             0x02 => {
-                // Quality stats report:
-                // [type(1), packets_received(2), packets_lost(2), jitter_ms(2), rtt_estimate_ms(2)]
+                // Quality stats report (infrequent) — uses main lock
                 if data.len() < 5 { return; }
                 let packets_received = u16::from_be_bytes([data[1], data[2]]) as f64;
                 let packets_lost = u16::from_be_bytes([data[3], data[4]]) as f64;
@@ -830,38 +888,16 @@ impl Hub {
                 let total = packets_received + packets_lost;
                 let loss_percent = if total > 0.0 { packets_lost / total * 100.0 } else { 0.0 };
 
+                let mut clients = self.clients.lock().await;
                 if let Some(client) = clients.get_mut(&id) {
                     client.quality_stats.push(QualityReport { loss_percent, jitter_ms });
-                    // Keep rolling window of last 3 reports
                     if client.quality_stats.len() > 3 {
                         client.quality_stats.remove(0);
                     }
                     Self::evaluate_bandwidth(client);
                 }
             }
-            0x04 => {
-                // Video frame: prepend sender_id (u16) to build forwarded frame
-                // Client sends: [type(1), seq(2), timestamp(4), flags(1), width(2), height(2), VP8...]
-                // Server sends: [type(1), sender_id(2), seq(2), timestamp(4), flags(1), width(2), height(2), VP8...]
-                if data.len() < 12 { return; }
-                let sender_id = (id as u16).to_be_bytes();
-                let mut forwarded = Vec::with_capacity(data.len() + 2);
-                forwarded.push(0x04); // type
-                forwarded.extend_from_slice(&sender_id); // sender_id (2 bytes)
-                forwarded.extend_from_slice(&data[1..]); // seq + timestamp + flags + width + height + payload
-
-                // Fan out to other clients in the same voice channel, but only if video is allowed
-                for (cid, client) in clients.iter() {
-                    if *cid == id { continue; }
-                    if client.voice_channel.as_deref() == Some(&voice_channel)
-                        && !client.username.is_empty()
-                        && client.video_allowed
-                    {
-                        let _ = client.tx.send(Message::Binary(forwarded.clone()));
-                    }
-                }
-            }
-            _ => {} // Unknown frame type, ignore
+            _ => {}
         }
     }
 

@@ -74,12 +74,12 @@ impl Hub {
 
         // Auto-leave previous voice channel
         if let Some(old_vc) = clients.get(&id).and_then(|c| c.voice_channel.clone()) {
+            self.voice_router.leave(id);
             let leave_msg = ServerMsg::VoiceUserLeft {
                 channel: old_vc.clone(),
                 username: username.clone(),
             };
             Self::broadcast_to_voice_channel_inner(&clients, &old_vc, &leave_msg, Some(id));
-
         }
 
         let old_vc = clients.get(&id).and_then(|c| c.voice_channel.clone());
@@ -87,6 +87,8 @@ impl Hub {
         // Set new voice channel
         if let Some(client) = clients.get_mut(&id) {
             client.voice_channel = Some(channel.clone());
+            // Update fast voice routing table
+            self.voice_router.join(id, client.tx.clone(), channel.clone(), username.clone());
         }
 
         // Mark new channel as occupied
@@ -147,6 +149,7 @@ impl Hub {
     }
 
     pub(super) async fn handle_voice_leave(&self, id: usize, channel: String) {
+        self.voice_router.leave(id);
         let mut clients = self.clients.lock().await;
         let username = match clients.get_mut(&id) {
             Some(c) if !c.username.is_empty() && c.voice_channel.as_deref() == Some(&channel) => {
