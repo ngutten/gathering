@@ -3,8 +3,10 @@
 //
 // Exports:
 //   initOpus()           → Promise<void>
-//   opusEncode(Float32Array) → Uint8Array | null
-//   opusDecode(Uint8Array)   → Float32Array | null
+//   opusEncode(Float32Array) → void  (result delivered via onEncoded callback)
+//   opusDecode(Uint8Array)   → void  (result delivered via onDecoded callback)
+//   setOnEncoded(cb)     → register callback(Uint8Array) for encode output
+//   setOnDecoded(cb)     → register callback(Float32Array) for decode output
 //   closeOpus()          → void
 //   opusSupported()      → bool  (true if we have real Opus, false = raw PCM fallback)
 
@@ -15,8 +17,8 @@ const BITRATE = 32000;
 
 let _encoder = null;
 let _decoder = null;
-let _encodedChunks = [];  // queue of encoded Uint8Array
-let _decodedChunks = [];  // queue of decoded Float32Array
+let _onEncoded = null;  // callback for encoded Opus packets
+let _onDecoded = null;  // callback for decoded PCM frames
 let _useWebCodecs = false;
 let _initialized = false;
 
@@ -49,7 +51,7 @@ export async function initOpus() {
       output: (chunk) => {
         const buf = new Uint8Array(chunk.byteLength);
         chunk.copyTo(buf);
-        _encodedChunks.push(buf);
+        if (_onEncoded) _onEncoded(buf);
       },
       error: (e) => console.error('[opus] Encoder error:', e),
     });
@@ -83,7 +85,7 @@ export async function initOpus() {
           pcm = new Float32Array(nFrames);
           for (let i = 0; i < nFrames; i++) pcm[i] = raw[i * nCh];
         }
-        _decodedChunks.push(pcm);
+        if (_onDecoded) _onDecoded(pcm);
         audioData.close();
       },
       error: (e) => console.error('[opus] Decoder error:', e),
@@ -102,13 +104,19 @@ export async function initOpus() {
   _initialized = true;
 }
 
+/** Register callback for encoded Opus packets: cb(Uint8Array) */
+export function setOnEncoded(cb) { _onEncoded = cb; }
+
+/** Register callback for decoded PCM frames: cb(Float32Array) */
+export function setOnDecoded(cb) { _onDecoded = cb; }
+
 /**
- * Encode a 20ms PCM frame (960 Float32 samples) to Opus.
- * Returns Uint8Array (Opus packet) or null if not ready.
- * In fallback mode, returns 16-bit PCM.
+ * Feed a 20ms PCM frame (960 Float32 samples) to the encoder.
+ * Result is delivered asynchronously via the onEncoded callback (WebCodecs)
+ * or synchronously (PCM fallback).
  */
 export function opusEncode(pcmFloat32) {
-  if (!_initialized) return null;
+  if (!_initialized) return;
 
   if (_useWebCodecs) {
     const audioData = new AudioData({
@@ -121,27 +129,26 @@ export function opusEncode(pcmFloat32) {
     });
     _encoder.encode(audioData);
     audioData.close();
-
-    // Return the latest encoded chunk (synchronous drain)
-    return _encodedChunks.shift() || null;
+    // Output delivered via _onEncoded callback from encoder output handler
+    return;
   }
 
-  // Fallback: convert Float32 → Int16 PCM
+  // Fallback: convert Float32 → Int16 PCM, deliver synchronously via callback
   const pcm16 = new Int16Array(pcmFloat32.length);
   for (let i = 0; i < pcmFloat32.length; i++) {
     const s = Math.max(-1, Math.min(1, pcmFloat32[i]));
     pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
   }
-  return new Uint8Array(pcm16.buffer);
+  if (_onEncoded) _onEncoded(new Uint8Array(pcm16.buffer));
 }
 
 /**
- * Decode an Opus packet (Uint8Array) to PCM Float32Array.
- * Returns Float32Array or null if not ready.
- * In fallback mode, expects 16-bit PCM.
+ * Feed an Opus packet (Uint8Array) to the decoder.
+ * Result is delivered asynchronously via the onDecoded callback (WebCodecs)
+ * or synchronously (PCM fallback).
  */
 export function opusDecode(opusData) {
-  if (!_initialized) return null;
+  if (!_initialized) return;
 
   if (_useWebCodecs) {
     const chunk = new EncodedAudioChunk({
@@ -150,18 +157,17 @@ export function opusDecode(opusData) {
       data: opusData,
     });
     _decoder.decode(chunk);
-
-    // Return the latest decoded chunk (synchronous drain)
-    return _decodedChunks.shift() || null;
+    // Output delivered via _onDecoded callback from decoder output handler
+    return;
   }
 
-  // Fallback: Int16 PCM → Float32
+  // Fallback: Int16 PCM → Float32, deliver synchronously via callback
   const pcm16 = new Int16Array(opusData.buffer, opusData.byteOffset, opusData.byteLength / 2);
   const pcmFloat = new Float32Array(pcm16.length);
   for (let i = 0; i < pcm16.length; i++) {
     pcmFloat[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
   }
-  return pcmFloat;
+  if (_onDecoded) _onDecoded(pcmFloat);
 }
 
 /** Close encoder and decoder, release resources */
@@ -174,8 +180,8 @@ export function closeOpus() {
   }
   _encoder = null;
   _decoder = null;
-  _encodedChunks = [];
-  _decodedChunks = [];
+  _onEncoded = null;
+  _onDecoded = null;
   _initialized = false;
   _useWebCodecs = false;
 }

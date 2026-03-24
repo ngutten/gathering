@@ -5,7 +5,7 @@
 
 import state, { emit } from './state.js';
 import { send, sendBinary } from './transport.js';
-import { initOpus, opusEncode, opusDecode, closeOpus, opusSupported } from './opus-codec.js';
+import { initOpus, opusEncode, opusDecode, setOnEncoded, setOnDecoded, closeOpus, opusSupported } from './opus-codec.js';
 import { initVideoCodec, videoEncode, videoDecode, requestKeyframe, closeVideoCodec, videoCodecSupported } from './video-codec.js';
 import { escapeHtml } from './render.js';
 import { buildAudioPipeline, setRnnoiseEnabled, MIC_CONSTRAINTS } from './audio-pipeline.js';
@@ -15,7 +15,10 @@ import { scopedGet } from './storage.js';
 const FRAME_DURATION_MS = 20;
 const SAMPLE_RATE = 48000;
 const FRAME_SIZE = 960; // 20ms at 48kHz
-const JITTER_BUFFER_FRAMES = 3; // 60ms fixed delay
+// Adaptive jitter buffer bounds (in ms)
+const JITTER_MIN_MS = 20;   // 1 frame — floor for LAN
+const JITTER_MAX_MS = 120;  // 6 frames — ceiling for bad connections
+const JITTER_ALPHA = 0.05;  // EMA smoothing factor for jitter estimation
 const STATS_INTERVAL_MS = 5000;
 const VIDEO_FPS = 30;
 const VIDEO_FRAME_INTERVAL = 1000 / VIDEO_FPS;
@@ -41,8 +44,11 @@ let _screenCaptureTimer = null;
 let _videoSeqNum = 0;
 let _videoPaused = false; // Server told us video is paused for bandwidth
 
-// Per-sender playback state: { gainNode, nextPlayTime, lastSeq, analyser, analyserInterval }
+// Per-sender playback state: { gainNode, nextPlayTime, lastSeq, analyser, analyserInterval, ... }
 const _senders = {};
+
+// Queue of pending decode contexts (senderId, username, seq) — consumed by onDecoded callback
+const _pendingDecodes = [];
 
 // Per-sender video decoders: { canvas, ctx, decoder (if WebCodecs) }
 const _videoReceivers = {};
@@ -76,6 +82,14 @@ export async function joinVoice(channel) {
     emit('system-message', 'Failed to initialize audio codec: ' + err.message);
     return;
   }
+
+  // Register decode callback — fires when WebCodecs produces decoded PCM
+  // (eliminates the 20ms pipeline delay from the old synchronous queue drain)
+  setOnDecoded((pcm) => {
+    const ctx = _pendingDecodes.shift();
+    if (!ctx) return;
+    playAudio(ctx.senderId, ctx.username, pcm, ctx.seq);
+  });
 
   let stream;
   try {
@@ -125,6 +139,34 @@ export async function joinVoice(channel) {
 
   _captureNode = new AudioWorkletNode(ctx, 'audio-capture-processor');
 
+  // Register encode callback — fires when WebCodecs produces an Opus packet
+  // (zero pipeline delay: the encoded data corresponds to the frame just fed in)
+  setOnEncoded((encoded) => {
+    // Capture current sequence/timestamp at the moment the encoder produces output.
+    // For WebCodecs this fires asynchronously (same task, microtask, or next task
+    // depending on browser), so we snapshot seq/timestamp here for accuracy.
+    const seq = _seqNum & 0xFFFF;
+    _seqNum++;
+    const timestamp = ((performance.now() - _joinTimestamp) | 0) >>> 0;
+    const flagSilent = _silentFrameCount > 1;
+    const flags = (opusSupported() ? 0x01 : 0x00) | (flagSilent ? 0x02 : 0x00);
+
+    const header = new Uint8Array(8);
+    header[0] = 0x01; // type: audio
+    header[1] = (seq >> 8) & 0xFF;
+    header[2] = seq & 0xFF;
+    header[3] = (timestamp >> 24) & 0xFF;
+    header[4] = (timestamp >> 16) & 0xFF;
+    header[5] = (timestamp >> 8) & 0xFF;
+    header[6] = timestamp & 0xFF;
+    header[7] = flags;
+
+    const frame = new Uint8Array(8 + encoded.length);
+    frame.set(header);
+    frame.set(encoded, 8);
+    sendBinary(frame);
+  });
+
   _captureNode.port.onmessage = (e) => {
     if (state.isMuted) { _silentFrameCount = 0; return; }
     const pcmFrame = e.data; // Float32Array, 960 samples
@@ -145,34 +187,8 @@ export async function joinVoice(channel) {
       _silentFrameCount = 0;
     }
 
-    const encoded = opusEncode(pcmFrame);
-    if (!encoded) return;
-
-    // Build client→server frame:
-    // [type(1), seq(2), timestamp(4), flags(1), payload...]
-    const seq = _seqNum & 0xFFFF;
-    _seqNum++;
-    const timestamp = ((performance.now() - _joinTimestamp) | 0) >>> 0;
-    // Only flag as silent well into holdover — the encoder output is pipelined
-    // 1 frame behind, so the first few "silent" frames carry the previous
-    // frame's (speech) encoded data.
-    const flagSilent = _silentFrameCount > 3;
-    const flags = (opusSupported() ? 0x01 : 0x00) | (flagSilent ? 0x02 : 0x00);
-
-    const header = new Uint8Array(8);
-    header[0] = 0x01; // type: audio
-    header[1] = (seq >> 8) & 0xFF;
-    header[2] = seq & 0xFF;
-    header[3] = (timestamp >> 24) & 0xFF;
-    header[4] = (timestamp >> 16) & 0xFF;
-    header[5] = (timestamp >> 8) & 0xFF;
-    header[6] = timestamp & 0xFF;
-    header[7] = flags;
-
-    const frame = new Uint8Array(8 + encoded.length);
-    frame.set(header);
-    frame.set(encoded, 8);
-    sendBinary(frame);
+    // Feed PCM to encoder — result delivered via onEncoded callback
+    opusEncode(pcmFrame);
   };
 
   pipelineOutput.connect(_captureNode);
@@ -250,6 +266,7 @@ export function cleanupVoice() {
   }
   state.localAnalyser = null;
 
+  _pendingDecodes.length = 0;
   closeOpus();
   closeVideoCodec();
 
@@ -339,14 +356,18 @@ export function handleBinaryFrame(data) {
       return;
     }
 
-    // Always decode and play — even for "silent"-flagged frames.
-    // The encoder output is pipelined 1 frame behind, so the silence
-    // flag may not match the actual encoded audio content.  Playing
-    // decoded silence is harmless and keeps the jitter buffer in sync.
-    const pcm = opusDecode(payload);
-    if (!pcm) return;
+    // Update jitter estimate for this sender (before decode)
+    const sender = ensureSender(senderId, username);
+    updateJitter(sender);
+
     if (isSilent) updateSpeakingIndicator(username, false);
-    playAudio(senderId, username, pcm, seq);
+
+    // Stash decode context so the onDecoded callback can route to the right sender.
+    // For PCM fallback, the callback fires synchronously within opusDecode().
+    // For WebCodecs, it fires asynchronously but the decoder is single-threaded
+    // and preserves order, so a simple queue of pending contexts works.
+    _pendingDecodes.push({ senderId, username, seq });
+    opusDecode(payload);
     return;
   }
 
@@ -755,8 +776,27 @@ function ensureSender(senderId, username) {
     analyserInterval,
     nextPlayTime: 0,
     lastSeq: -1,
+    // Adaptive jitter buffer state
+    lastArrivalTime: 0,
+    jitterEstimate: FRAME_DURATION_MS, // start conservative (1 frame)
+    targetBufferMs: JITTER_MIN_MS * 2,  // start at 40ms, will adapt
   };
   return _senders[senderId];
+}
+
+/** Update adaptive jitter estimate for a sender based on inter-arrival time variance */
+function updateJitter(sender) {
+  const now = performance.now();
+  if (sender.lastArrivalTime > 0) {
+    const interArrival = now - sender.lastArrivalTime;
+    const deviation = Math.abs(interArrival - FRAME_DURATION_MS);
+    // Exponential moving average of jitter
+    sender.jitterEstimate = sender.jitterEstimate * (1 - JITTER_ALPHA) + deviation * JITTER_ALPHA;
+    // Target buffer = 2.5× jitter estimate, clamped to bounds
+    sender.targetBufferMs = Math.max(JITTER_MIN_MS,
+      Math.min(JITTER_MAX_MS, sender.jitterEstimate * 2.5));
+  }
+  sender.lastArrivalTime = now;
 }
 
 function cleanupSender(senderId) {
@@ -785,12 +825,12 @@ function playAudio(senderId, username, pcmFloat32, seq) {
   }
   sender.lastSeq = seq;
 
-  // Schedule playback with jitter buffer delay
+  // Schedule playback with adaptive jitter buffer delay
   const now = ctx.currentTime;
-  const jitterDelay = JITTER_BUFFER_FRAMES * FRAME_DURATION_MS / 1000;
+  const jitterDelay = sender.targetBufferMs / 1000;
 
   if (sender.nextPlayTime < now) {
-    // Jitter buffer underrun — reset timing
+    // Jitter buffer underrun — reset timing with current adaptive delay
     sender.nextPlayTime = now + jitterDelay;
   }
 
