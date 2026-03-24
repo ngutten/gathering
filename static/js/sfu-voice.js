@@ -68,12 +68,25 @@ const _dbg = {
 
 function dbgCapture(pcm) {
   if (!_dbg.active || _dbg.capturedFrames.length >= _dbg.maxFrames) return;
+  // Count consecutive zero-runs (evidence of RNNoise passthrough frame alignment bug)
+  let zeroRuns = 0, inZero = false, maxZeroRun = 0, curZeroRun = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    if (pcm[i] === 0) {
+      if (!inZero) { zeroRuns++; inZero = true; curZeroRun = 0; }
+      curZeroRun++;
+      if (curZeroRun > maxZeroRun) maxZeroRun = curZeroRun;
+    } else {
+      inZero = false;
+    }
+  }
   _dbg.capturedFrames.push({
     t: performance.now(),
     peak: dbgPeak(pcm),
     rms: dbgRms(pcm),
     first4: Array.from(pcm.slice(0, 4)),
     last4: Array.from(pcm.slice(-4)),
+    zeroRuns,
+    maxZeroRun,
   });
 }
 
@@ -132,6 +145,15 @@ function dbgAnalyze() {
       console.log(`  Interval — min: ${intervals[0].toFixed(1)}ms, med: ${intervals[Math.floor(intervals.length/2)].toFixed(1)}ms, max: ${intervals[intervals.length-1].toFixed(1)}ms`);
     }
     console.log(`  Waveform: ${dbgAscii(peaks)}`);
+    // Zero-run analysis (detects RNNoise passthrough frame alignment bug)
+    const framesWithZeros = cap.filter(f => f.zeroRuns > 0);
+    if (framesWithZeros.length > 0) {
+      const maxRuns = framesWithZeros.map(f => f.maxZeroRun);
+      const totalRuns = framesWithZeros.reduce((a, f) => a + f.zeroRuns, 0);
+      console.warn(`  ⚠ Zero-runs: ${framesWithZeros.length}/${cap.length} frames contain zero-runs (${totalRuns} total runs, max consecutive: ${Math.max(...maxRuns)} samples)`);
+    } else {
+      console.log(`  Zero-runs: none detected (clean signal)`);
+    }
     console.groupEnd();
   }
 

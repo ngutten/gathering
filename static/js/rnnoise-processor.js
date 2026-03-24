@@ -24,12 +24,18 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
     this._enabled = true;
     this._ready = false;
 
-    // Ring buffer for accumulating 128-sample blocks into 480-sample frames
+    // Input accumulator: collects 128-sample browser blocks into 480-sample RNNoise frames
     this._inBuf = new Float32Array(RNNOISE_FRAME_SIZE);
-    this._outBuf = new Float32Array(RNNOISE_FRAME_SIZE);
-    this._inPos = 0;    // write position in _inBuf
-    this._outPos = 0;   // read position in _outBuf
-    this._outAvail = 0; // samples available in _outBuf
+    this._inPos = 0;
+
+    // Output ring buffer: large enough to hold 2 processed frames (960 samples)
+    // so a new frame can be appended while the previous one is still being drained.
+    // This prevents the old single-buffer overwrite bug where unread samples were lost
+    // when processing triggered mid-block (480 % 128 != 0).
+    this._ringBuf = new Float32Array(960);
+    this._ringRead = 0;
+    this._ringWrite = 0;
+    this._ringCount = 0; // samples available
 
     this.port.onmessage = (e) => this._handleMessage(e.data);
   }
@@ -99,36 +105,42 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
   }
 
   _processFrame() {
+    // Temporary buffer for this frame's output
+    let processed;
+
     if (!this._ready || !this._enabled) {
       // Pass through unchanged
-      this._outBuf.set(this._inBuf);
-      this._outAvail = RNNOISE_FRAME_SIZE;
-      this._outPos = 0;
-      return;
+      processed = this._inBuf;
+    } else {
+      const exports = this._wasm.exports;
+      const heap = new Float32Array(exports.memory.buffer);
+      const offset = this._inputPtr >> 2;
+
+      // RNNoise expects samples scaled to 16-bit range (-32768..32767)
+      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
+        heap[offset + i] = this._inBuf[i] * 32768.0;
+      }
+
+      // Process — modifies buffer in-place, returns VAD probability
+      const vad = exports.rnnoise_process_frame(this._rnnoiseState, this._inputPtr, this._inputPtr);
+
+      // Scale back to float range and write into _inBuf (reuse as temp)
+      for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
+        this._inBuf[i] = heap[offset + i] / 32768.0;
+      }
+      processed = this._inBuf;
+
+      this.port.postMessage({ type: 'vad', probability: vad });
     }
 
-    const exports = this._wasm.exports;
-    const heap = new Float32Array(exports.memory.buffer);
-    const offset = this._inputPtr >> 2; // byte offset to float index
-
-    // RNNoise expects samples scaled to 16-bit range (-32768..32767)
+    // Append processed samples to ring buffer
+    const cap = this._ringBuf.length;
     for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-      heap[offset + i] = this._inBuf[i] * 32768.0;
+      if (this._ringCount >= cap) break; // ring full, drop (shouldn't happen)
+      this._ringBuf[this._ringWrite] = processed[i];
+      this._ringWrite = (this._ringWrite + 1) % cap;
+      this._ringCount++;
     }
-
-    // Process — modifies buffer in-place, returns VAD probability
-    const vad = exports.rnnoise_process_frame(this._rnnoiseState, this._inputPtr, this._inputPtr);
-
-    // Scale back to float range
-    for (let i = 0; i < RNNOISE_FRAME_SIZE; i++) {
-      this._outBuf[i] = heap[offset + i] / 32768.0;
-    }
-
-    this._outAvail = RNNOISE_FRAME_SIZE;
-    this._outPos = 0;
-
-    // Report VAD (throttle to avoid flooding — only send if significant change)
-    this.port.postMessage({ type: 'vad', probability: vad });
   }
 
   process(inputs, outputs) {
@@ -138,33 +150,27 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
 
     const inData = input[0];
     const outData = output[0];
-    let inOffset = 0;
-    let outOffset = 0;
 
-    while (inOffset < inData.length || outOffset < outData.length) {
-      // Fill input ring buffer from incoming samples
-      while (inOffset < inData.length && this._inPos < RNNOISE_FRAME_SIZE) {
-        this._inBuf[this._inPos++] = inData[inOffset++];
-      }
-
-      // If we have a full frame, process it
+    // 1. Accumulate all input samples into the RNNoise input buffer.
+    //    Process a frame each time we hit 480 samples.
+    for (let i = 0; i < inData.length; i++) {
+      this._inBuf[this._inPos++] = inData[i];
       if (this._inPos >= RNNOISE_FRAME_SIZE) {
         this._processFrame();
         this._inPos = 0;
       }
+    }
 
-      // Drain output buffer to output
-      while (outOffset < outData.length && this._outAvail > 0) {
-        outData[outOffset++] = this._outBuf[this._outPos++];
-        this._outAvail--;
-      }
-
-      // If no more input and no more output available, fill remainder with silence
-      if (inOffset >= inData.length && this._outAvail <= 0) {
-        while (outOffset < outData.length) {
-          outData[outOffset++] = 0;
-        }
-        break;
+    // 2. Drain output ring buffer into the output block.
+    //    If the ring buffer has fewer samples than needed, output silence
+    //    for the remainder (only happens during the initial fill).
+    for (let i = 0; i < outData.length; i++) {
+      if (this._ringCount > 0) {
+        outData[i] = this._ringBuf[this._ringRead];
+        this._ringRead = (this._ringRead + 1) % this._ringBuf.length;
+        this._ringCount--;
+      } else {
+        outData[i] = 0;
       }
     }
 
