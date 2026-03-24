@@ -5,6 +5,7 @@ import { send, apiFetch } from './transport.js';
 import { encryptFile, encryptChannelKeyForUser, generateChannelKey, tryEncrypt } from './crypto.js';
 import { escapeHtml, formatFileSize } from './render.js';
 import { appendSystem, cancelReply, getEffectiveGhostTtl } from './chat-ui.js';
+import { scopedGet, scopedSet } from './storage.js';
 
 const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_INPUT_HEIGHT_PX = 120;
@@ -137,6 +138,31 @@ export function cancelEdit() {
 
 export function deleteMessage(msgId) {
   send('DeleteMessage', { message_id: msgId });
+}
+
+export function hideMessage(msgId) {
+  const hidden = getHiddenMessages();
+  hidden.add(msgId);
+  saveHiddenMessages(hidden);
+  const el = document.querySelector(`.msg[data-msg-id="${msgId}"]`);
+  if (el) el.remove();
+}
+
+export function unhideMessage(msgId) {
+  const hidden = getHiddenMessages();
+  hidden.delete(msgId);
+  saveHiddenMessages(hidden);
+}
+
+export function getHiddenMessages() {
+  try {
+    const raw = scopedGet('hidden_messages');
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch { return new Set(); }
+}
+
+function saveHiddenMessages(set) {
+  scopedSet('hidden_messages', JSON.stringify([...set]));
 }
 
 // ── Drag-and-drop + paste file handling ──

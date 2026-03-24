@@ -25,6 +25,7 @@ function buildMsgActionsHtml(msg) {
   if (canPin) html += `<button onclick="togglePinMessage('${msg.id}')" aria-label="${msg.pinned ? 'Unpin' : 'Pin'} message">${msg.pinned ? 'unpin' : 'pin'}</button>`;
   if (isOwn && !isAnon) html += `<button onclick="startEditMessage('${msg.id}')" aria-label="Edit message">edit</button>`;
   if (isAnon ? state.isAdmin : (isOwn || state.isAdmin)) html += `<button class="del-btn" onclick="deleteMessage('${msg.id}')" aria-label="Delete message">del</button>`;
+  if (!isOwn) html += `<button onclick="hideMessage('${msg.id}')" aria-label="Hide message">hide</button>`;
   html += '</div>';
   return html;
 }
@@ -1690,6 +1691,7 @@ export function initContextMenu() {
     if (canPin) items += `<div class="ctx-item" data-action="pin">${isPinned ? 'Unpin' : 'Pin'}</div>`;
     if (isOwn) items += `<div class="ctx-item" data-action="edit">Edit</div>`;
     if (isOwn || state.isAdmin) items += `<div class="ctx-item ctx-danger" data-action="delete">Delete</div>`;
+    if (!isOwn) items += `<div class="ctx-item" data-action="hide">Hide</div>`;
 
     menu.innerHTML = items;
     menu.style.display = 'block';
@@ -1729,6 +1731,7 @@ export function initContextMenu() {
         case 'pin': window.togglePinMessage(msgId); break;
         case 'edit': window.startEditMessage(msgId); break;
         case 'delete': window.deleteMessage(msgId); break;
+        case 'hide': window.hideMessage(msgId); break;
       }
     };
   }

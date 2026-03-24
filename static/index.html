@@ -327,6 +327,12 @@
   import('./js/config.js').then(m => {
     console.log('[gathering] isTauri:', m.isTauri, 'apiUrl test:', m.apiUrl('/api/login'));
   }).catch(e => console.error('[gathering] Module load failed:', e));
+  // Verify app.js loaded successfully
+  import('./js/app.js').catch(e => {
+    console.error('[gathering] app.js failed to load:', e);
+    const err = document.getElementById('auth-error');
+    if (err) { err.textContent = 'Module load error: ' + e.message; err.style.display = 'block'; }
+  });
 </script>
 </body>
 </html>

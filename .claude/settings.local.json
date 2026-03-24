@@ -24,7 +24,9 @@
       "Bash(curl:*)",
       "Bash(find:*)",
       "Bash(node:*)",
-      "Bash(cargo doc:*)"
+      "Bash(cargo doc:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(for f:*)"
     ]
   }
 }

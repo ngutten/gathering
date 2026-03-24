@@ -8,6 +8,7 @@ import { renderRichContent, escapeHtml } from './render.js';
 import { renderVoiceMembers, createPeerConnection, handleVoiceSignal, cleanupVoice } from './voice.js';
 import { removeAllTilesForUser } from './chat-ui.js';
 import { switchView, renderTopicList, renderThread, appendTopicReply } from './topics.js';
+import { getHiddenMessages } from './input.js';
 import { renderAdminSettings, renderAdminInvites, renderAdminRoles, onInviteCreated, onUserRolesResponse } from './admin.js';
 import { handleMyFileList, handleFilePinned, handleFileDeleted } from './files.js';
 import { handleSearchResults, handleSearchHistory } from './search.js';
@@ -77,6 +78,7 @@ export function handleServerMsg(msg) {
       break;
 
     case 'Message':
+      if (getHiddenMessages().has(msg.id)) break;
       appendMessage(msg);
       if (msg.channel && msg.channel !== state.currentChannel && msg.author !== state.currentUser) {
         state.unreadCounts[msg.channel] = (state.unreadCounts[msg.channel] || 0) + 1;
@@ -107,7 +109,8 @@ export function handleServerMsg(msg) {
         if (state.encryptedChannels.has(msg.channel) && !state.channelKeys[msg.channel] && msg.messages.some(m => m.encrypted)) {
           appendSystem('Waiting for an existing member to come online and share the channel key...');
         }
-        msg.messages.forEach(m => appendMessage({ ...m, channel: msg.channel }));
+        const hidden = getHiddenMessages();
+        msg.messages.filter(m => !hidden.has(m.id)).forEach(m => appendMessage({ ...m, channel: msg.channel }));
       }
       break;
 

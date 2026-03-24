@@ -8,6 +8,7 @@ import { send, sendBinary } from './transport.js';
 import { initOpus, opusEncode, opusDecode, closeOpus, opusSupported } from './opus-codec.js';
 import { initVideoCodec, videoEncode, videoDecode, requestKeyframe, closeVideoCodec, videoCodecSupported } from './video-codec.js';
 import { escapeHtml } from './render.js';
+import { buildAudioPipeline, MIC_CONSTRAINTS } from './audio-pipeline.js';
 
 // ── Constants ──
 const FRAME_DURATION_MS = 20;
@@ -22,6 +23,7 @@ const VIDEO_FRAME_INTERVAL = 1000 / VIDEO_FPS;
 let _audioCtx = null;
 let _captureNode = null;
 let _captureStream = null;
+let _audioPipeline = null;
 let _joinTimestamp = 0;
 let _seqNum = 0;
 let _statsTimer = null;
@@ -76,7 +78,7 @@ export async function joinVoice(channel) {
 
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS, video: false });
   } catch (err) {
     emit('system-message', 'Microphone access denied: ' + err.message);
     return;
@@ -94,6 +96,18 @@ export async function joinVoice(channel) {
   _videoSeqNum = 0;
   _videoPaused = false;
 
+  // Build audio processing pipeline: high-pass filter + noise gate
+  let pipelineOutput;
+  try {
+    const pipeline = await buildAudioPipeline(ctx, stream);
+    _audioPipeline = pipeline;
+    pipelineOutput = pipeline.outputNode;
+  } catch (pipelineErr) {
+    // Fallback: connect mic source directly
+    console.warn('[sfu] Audio pipeline failed, using raw mic:', pipelineErr);
+    pipelineOutput = ctx.createMediaStreamSource(stream);
+  }
+
   // Set up AudioWorklet capture pipeline
   // Use import.meta.url for correct resolution in Tauri (where document base URL
   // differs from the asset protocol used by AudioWorklet module fetches).
@@ -107,7 +121,6 @@ export async function joinVoice(channel) {
     }
   }
 
-  const source = ctx.createMediaStreamSource(stream);
   _captureNode = new AudioWorkletNode(ctx, 'audio-capture-processor');
 
   _captureNode.port.onmessage = (e) => {
@@ -160,7 +173,7 @@ export async function joinVoice(channel) {
     sendBinary(frame);
   };
 
-  source.connect(_captureNode);
+  pipelineOutput.connect(_captureNode);
   _captureNode.connect(ctx.destination); // needed to keep worklet alive (outputs silence)
 
   send('VoiceJoin', { channel: ch });
@@ -193,11 +206,15 @@ export function leaveVoice() {
 }
 
 export function cleanupVoice() {
-  // Stop capture
+  // Stop capture and audio pipeline
   if (_captureNode) {
     _captureNode.port.onmessage = null;
     _captureNode.disconnect();
     _captureNode = null;
+  }
+  if (_audioPipeline) {
+    _audioPipeline.cleanup();
+    _audioPipeline = null;
   }
   if (_captureStream) {
     _captureStream.getTracks().forEach(t => t.stop());

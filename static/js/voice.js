@@ -5,6 +5,7 @@
 import state, { emit, serverHas } from './state.js';
 import { send } from './transport.js';
 import { escapeHtml } from './render.js';
+import { buildAudioPipeline, MIC_CONSTRAINTS } from './audio-pipeline.js';
 
 // Lazy-loaded SFU module reference
 let _sfuModule = null;
@@ -19,6 +20,10 @@ async function getSfuModule() {
 function isSfuMode() {
   return serverHas('voice_sfu');
 }
+
+// ── Audio processing state ──
+let _rawMicStream = null;   // Original getUserMedia stream (for cleanup)
+let _audioPipeline = null;  // { source, outputNode, noiseGateNode, cleanup() }
 
 // Shared AudioContext — created during user gesture (joinVoice) so it won't be
 // suspended by Chrome's autoplay policy.  Reused for all audio routing & analysis.
@@ -126,7 +131,7 @@ export function createVoiceChannel(channelName) {
   send('CreateVoiceChannel', { channel: name });
 }
 
-export function joinVoice(channel) {
+export async function joinVoice(channel) {
   // SFU mode: delegate entirely to sfu-voice.js
   if (isSfuMode()) {
     getSfuModule().then(sfu => sfu.joinVoice(channel));
@@ -144,10 +149,28 @@ export function joinVoice(channel) {
   }
   // Create shared AudioContext now, during the user gesture, so Chrome won't
   // suspend it.  This context is reused for all audio routing & speaking detection.
-  getVoiceAudioContext();
+  const ctx = getVoiceAudioContext();
 
-  navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
-    state.localStream = stream;
+  try {
+    const rawStream = await navigator.mediaDevices.getUserMedia({
+      audio: MIC_CONSTRAINTS,
+      video: false,
+    });
+    _rawMicStream = rawStream;
+
+    // Build audio processing pipeline: high-pass filter + noise gate
+    try {
+      const pipeline = await buildAudioPipeline(ctx, rawStream);
+      _audioPipeline = pipeline;
+      const dest = ctx.createMediaStreamDestination();
+      pipeline.outputNode.connect(dest);
+      state.localStream = dest.stream;
+    } catch (pipelineErr) {
+      // Fallback: use raw stream (still has browser-level constraints)
+      console.warn('[voice] Audio pipeline failed, using raw stream:', pipelineErr);
+      state.localStream = rawStream;
+    }
+
     state.inVoiceChannel = true;
     state.voiceChannel = ch;
     state.activeVoiceChannel = ch;
@@ -163,9 +186,9 @@ export function joinVoice(channel) {
     startLocalSpeakingDetection();
     // Re-render voice channel list to show active state
     import('./chat-ui.js').then(m => m.renderVoiceChannelList());
-  }).catch(err => {
+  } catch (err) {
     emit('system-message', 'Microphone access denied: ' + err.message);
-  });
+  }
 }
 
 export function joinVoiceChannel(channelName) {
@@ -201,6 +224,15 @@ export function cleanupVoice() {
   }
   state.peerConnections = {};
   state.userGainNodes = {};
+  // Clean up audio pipeline and raw mic stream
+  if (_audioPipeline) {
+    _audioPipeline.cleanup();
+    _audioPipeline = null;
+  }
+  if (_rawMicStream) {
+    _rawMicStream.getTracks().forEach(t => t.stop());
+    _rawMicStream = null;
+  }
   if (state.localStream) {
     state.localStream.getTracks().forEach(t => t.stop());
     state.localStream = null;
@@ -864,6 +896,10 @@ export function setUserVolume(user, vol) {
 
 export function toggleMute() {
   state.isMuted = !state.isMuted;
+  // Mute at the raw mic level (stops audio entering the pipeline entirely)
+  if (_rawMicStream) {
+    _rawMicStream.getAudioTracks().forEach(t => t.enabled = !state.isMuted);
+  }
   if (state.localStream) {
     state.localStream.getAudioTracks().forEach(t => t.enabled = !state.isMuted);
   }
