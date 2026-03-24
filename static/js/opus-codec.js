@@ -23,6 +23,9 @@ let _onDecoded = null;  // callback for decoded PCM frames
 let _onDecodeError = null; // callback for decode errors (so caller can sync state)
 let _useWebCodecs = false;
 let _initialized = false;
+let _encodeTimestamp = 0;  // microseconds, monotonically increasing for encoder
+let _decodeTimestamp = 0;  // microseconds, monotonically increasing for decoder
+const FRAME_DURATION_US = (FRAME_SIZE / SAMPLE_RATE) * 1_000_000; // 20000µs per frame
 
 /** Detect WebCodecs Opus support */
 async function detectWebCodecs() {
@@ -132,12 +135,12 @@ export function opusEncode(pcmFloat32) {
       sampleRate: SAMPLE_RATE,
       numberOfFrames: pcmFloat32.length,
       numberOfChannels: CHANNELS,
-      timestamp: 0, // encoder doesn't care about absolute timestamp
+      timestamp: _encodeTimestamp,
       data: pcmFloat32,
     });
     _encoder.encode(audioData);
     audioData.close();
-    // Output delivered via _onEncoded callback from encoder output handler
+    _encodeTimestamp += FRAME_DURATION_US;
     return;
   }
 
@@ -161,10 +164,11 @@ export function opusDecode(opusData) {
   if (_useWebCodecs) {
     const chunk = new EncodedAudioChunk({
       type: 'key',
-      timestamp: 0,
+      timestamp: _decodeTimestamp,
       data: opusData,
     });
     _decoder.decode(chunk);
+    _decodeTimestamp += FRAME_DURATION_US;
     // Output delivered via _onDecoded callback from decoder output handler
     return;
   }
@@ -191,6 +195,8 @@ export function closeOpus() {
   _onEncoded = null;
   _onDecoded = null;
   _onDecodeError = null;
+  _encodeTimestamp = 0;
+  _decodeTimestamp = 0;
   _initialized = false;
   _useWebCodecs = false;
 }
